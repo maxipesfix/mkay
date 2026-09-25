@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Live navigation test reports: generated, and they contain private project and
+# session names. Written to whichever directory the test runs from.
+*-navigation-*.txt
+
+# Local environment and secrets
+.env
+.env.*
+
+# Claude Code local settings
+.claude/settings.local.json
+
+# macOS and editors
+.DS_Store
+.idea/
+.vscode/
+*.swp
