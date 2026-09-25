@@ -196,6 +196,9 @@ class NativeAX:
             raise AXError('set messaging timeout', code)
         if app.get(flag) not in (True, 1):
             code = self.set_bool(ref, flag)
+            if code == -25208 and flag != 'AXManualAccessibility':
+                # Not implemented: newer Electron builds (Cursor; Claude 2.9939) take only this flag.
+                code = self.set_bool(ref, 'AXManualAccessibility')
             if code not in (0, -25205):
                 raise AXError('enable enhanced accessibility', code)
         return app

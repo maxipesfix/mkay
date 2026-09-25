@@ -23,6 +23,8 @@ class Item:
 
 
 class ClaudeSidebar(Sidebar):
+    # status walks the whole primary pane, which holds the open conversation.
+    STACK_BUDGET = 20000
     def main_window(self):
         windows = [w for w in self.app.get('AXWindows') or [] if w.get('AXTitle') == 'Claude']
         if len(windows) != 1:
@@ -243,10 +245,29 @@ class ClaudeSidebar(Sidebar):
                     lines.append(f'depth={len(ancestors)} {role} label={label(node)!r} expanded={expanded(node)!r}')
         return '\n'.join(lines)
 
+    def status(self, mode):
+        """Read-only: view, whether the open conversation is responding, and sidebar states.
+
+        While Claude responds, the composer shows a button described exactly "Stop"
+        (observed on 2.9939.2). Sidebar rows prefix their titles with a state such as
+        "Running " or "Unread response ".
+        """
+        busy = any(role == 'AXButton' and n.get('AXDescription') == 'Stop'
+                   for n, role, _ in self.walk(self.region('Primary pane'), 20000))
+        lines = [f'mode: {mode}', 'busy: ' + ('yes' if busy else 'no')]
+        for n, role, _ in self.rows(self.region('Sidebar')):
+            text = label(n) if role == 'AXButton' else ''
+            for prefix, key in (('Running ', 'running'), ('Unread response ', 'unread')):
+                if text.startswith(prefix):
+                    lines.append(f'{key}: {text[len(prefix):]}')
+        return '\n'.join(lines)
+
     def run(self, command, project='', recents=False):
         mode = self.read(self.mode)
         if command == 'debug-sidebar':
             return self.debug()
+        if command == 'status':
+            return self.read(lambda: self.status(mode))
         if command == 'projects':
             items = self.open_projects() if mode == 'chat' else [p for p in self.read(self.folders) if p.title != 'No folder']
         elif project:
@@ -280,7 +301,7 @@ end tell'''
 
 def main(args=None):
     args = list(sys.argv[1:] if args is None else args)
-    if not args or args[0] not in ('projects', 'sessions', 'debug-sidebar'):
+    if not args or args[0] not in ('projects', 'sessions', 'debug-sidebar', 'status'):
         print('Use agent_ctl.py --app claude projects or sessions [--project NAME | --recents].', file=sys.stderr)
         return 2
     command, project, recents = args[0], '', False

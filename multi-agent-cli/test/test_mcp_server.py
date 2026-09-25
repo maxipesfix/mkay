@@ -27,9 +27,9 @@ from mcp.client.streamable_http import streamable_http_client
 
 ROOT = Path(__file__).resolve().parent.parent
 SERVER = ROOT / 'agent_mcp.py'
-EXPECTED_TOOLS = {'list_apps', 'get_mode', 'set_mode', 'list_projects', 'list_sessions', 'open_session',
-                  'read_reply', 'type_text', 'send_message', 'submit_draft', 'cursor_open_project',
-                  'cursor_answer_question', 'diagnose'}
+EXPECTED_TOOLS = {'list_apps', 'status', 'get_mode', 'set_mode', 'list_projects', 'list_sessions',
+                  'open_session', 'read_reply', 'wait_for_reply', 'ask_agent', 'type_text', 'send_message',
+                  'submit_draft', 'cursor_open_project', 'cursor_answer_question', 'diagnose'}
 
 failures = []
 
@@ -45,6 +45,7 @@ async def exercise(client, app):
     check(set(tools) == EXPECTED_TOOLS, 'tool list: ' + ', '.join(sorted(tools)))
     check(tools['read_reply'].annotations.read_only_hint is True, 'read_reply is marked read-only')
     check(tools['send_message'].annotations.destructive_hint is True, 'send_message is marked as submitting')
+    check(tools['ask_agent'].annotations.destructive_hint is True, 'ask_agent is marked as submitting')
 
     apps = await client.call_tool('list_apps', {})
     names = [entry['app'] for entry in apps.structured_content['result']]
@@ -59,6 +60,16 @@ async def exercise(client, app):
         sessions = await client.call_tool('list_sessions', {'app': app, 'project': listed[0]})
         got = (sessions.structured_content or {}).get('sessions')
         check(not sessions.is_error and isinstance(got, list), f'list_sessions({app}, {listed[0]!r}): {got}')
+    state = await client.call_tool('status', {'apps': [app]})
+    entry = (state.structured_content or {}).get('result', [{}])[0]
+    check(not state.is_error and entry.get('mode') and entry.get('error') is None, f'status([{app}]): {entry}')
+    if entry.get('busy') is False and not entry.get('pending_question'):
+        waited = await client.call_tool('wait_for_reply', {'app': app, 'timeout_seconds': 60})
+        result = waited.structured_content or {}
+        check(not waited.is_error and result.get('status') == 'done',
+              f"wait_for_reply({app}) on an idle chat: {result.get('status')} after {result.get('waited_seconds')}s")
+    else:
+        print(f'SKIP: wait_for_reply({app}) needs an idle chat without a pending question', flush=True)
     reply = await client.call_tool('read_reply', {'app': app})
     text = reply.content[0].text if reply.content else ''
     check(not reply.is_error or 'No ' in text, f'read_reply({app}) returned or reported cleanly: {text[:80]!r}')
@@ -70,6 +81,9 @@ async def exercise(client, app):
     check(both.is_error, 'list_sessions refuses project together with recents')
     bad_letter = await client.call_tool('cursor_answer_question', {'letter': '12'})
     check(bad_letter.is_error, 'cursor_answer_question refuses a non-letter')
+    missing = await client.call_tool('ask_agent', {'app': app, 'message': 'must not be sent',
+                                                   'session': 'no-such-session-title-xyz'})
+    check(missing.is_error, 'ask_agent stops at an unknown session before sending: ' + missing.content[0].text[:90])
     bad_app = await client.call_tool('get_mode', {'app': 'codex'})
     check(bad_app.is_error, 'get_mode refuses an unknown app')
     if app == 'cursor':

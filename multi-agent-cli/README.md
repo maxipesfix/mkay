@@ -11,12 +11,18 @@ remote LLM clients; see **MCP server**.
 | App (tested views) | Version | Build | Bundle ID |
 | --- | --- | --- | --- |
 | ChatGPT (ChatGPT and Codex) | `26.915.31945` | `9922` | `com.openai.codex` |
-| Claude (Chat/Cowork and Code) | `2.7032.0` | `2.7032.0` | `com.anthropic.claudefordesktop` |
+| Claude (Chat/Cowork and Code) | `2.9939.2` | `2.9939.2` | `com.anthropic.claudefordesktop` |
 | Cursor (Agents and IDE) | `3.21.18` | `3.21.18` | `com.todesktop.230313mzl4w4u92` |
 
-Versions were read from the installed apps on 2026-09-24, after the tests below
-passed. App updates can change the accessibility tree these scripts rely on; if a
-command starts failing after an update, run the matching diagnostic and compare.
+Versions were read from the installed apps on 2026-09-24 (Claude on 2026-09-25, after
+it updated from `2.7032.0`). The live navigation tests below ran on the earlier Claude
+version; on `2.9939.2` the `mode`, `projects` and `status` commands and the MCP tools
+were checked. App updates can change the accessibility tree these scripts rely on; if
+a command starts failing after an update, run the matching diagnostic and compare.
+
+Claude `2.9939.2`, like Cursor, rejects the `AXEnhancedUserInterface` flag that
+exposes an Electron app's full interface; the scripts then fall back to
+`AXManualAccessibility`.
 
 ## Setup
 
@@ -106,6 +112,7 @@ messages that contain spaces.
 | `sessions` | ✅ | ✅ | ✅ |
 | `sessions --project "NAME"` | ✅ | ✅ | ✅ |
 | `sessions --recents` | ✅ | ✅ | Refused (exit 2) |
+| `status` | ✅ | ✅ | ✅ |
 | `session "TITLE"` | ✅ | ✅ | ✅ |
 | `project "NAME"` | — | — | ✅ |
 | `read` | ✅ | ✅ | ✅ |
@@ -122,6 +129,7 @@ messages that contain spaces.
 | `sessions --recents` | Lists the current view's recent/unassigned sessions |
 | `session "TITLE"` | Opens a session matching the title |
 | `read` | Prints the latest assistant reply in the selected conversation |
+| `status` | Read-only: view, whether the open conversation is still working, and more; see below |
 | `type "TEXT"` | Pastes and verifies text in the empty prompt box without submitting |
 | `send "TEXT"` | Pastes and verifies text, then presses Return to submit |
 | `enter` | Submits the existing draft |
@@ -154,6 +162,34 @@ gets only the result.
 | `1` | The command ran but failed or refused, for example a title that matched nothing |
 | `2` | Invalid usage, for example an unknown command or a missing argument |
 | `130` | Interrupted |
+
+### Status
+
+`status` prints `key: value` lines and never changes anything:
+
+```text
+mode: code
+busy: yes
+running: MCP remote control macOS tests
+unread: Background noise interruptions in Nexor-Pipecat
+```
+
+| Key | Apps | Meaning |
+| --- | --- | --- |
+| `mode` | All | Current view, as printed by `mode` |
+| `busy` | All | `yes` while the open conversation's agent is working, detected by the stop control that replaces Send; Cursor prints `unknown` when its main window has no agent composer |
+| `question` | Cursor | `yes` while a multiple-choice question is pending |
+| `running` | Claude | One line per sidebar session still working |
+| `unread` | Claude | One line per sidebar session with an unread reply |
+
+The busy signal was confirmed live for Claude `2.9939.2` (its composer shows a
+**Stop** button while responding) and ChatGPT (`busy: yes` while a reply streamed,
+then `no`). Cursor was only checked idle; its busy state assumes the stop control
+that replaces **Send message** while generating (labels such as `Stop` or
+`Stop generating`, optionally with a shortcut) and has not been observed live yet.
+
+Run other UI automation against an app while a command is working on it and the
+command can stall; the MCP server avoids this by running one command at a time.
 
 ### Listing scope
 
@@ -216,6 +252,7 @@ only to bring Cursor forward, paste, and press Return.
 | Command | Agents view | IDE view |
 | --- | --- | --- |
 | `mode` | Prints `agents` | Prints `ide` |
+| `status` | View, busy, and pending question for the Agents window's chat | Same, for the main IDE window's agent chat |
 | `mode ide` / `mode agents` | Presses Cursor's **IDE** button; Cursor picks the IDE window | Presses **Agents Window** |
 | `projects` | Repository names from the sidebar | Workspace names of the open IDE windows |
 | `project "NAME"` | Switches to the IDE view on that workspace's window | Brings that workspace's window forward |
@@ -331,12 +368,15 @@ dependencies are declared inside the script and pinned in `agent_mcp.py.lock`, a
 | Tool | CLI command | Kind |
 | --- | --- | --- |
 | `list_apps` | — | Read: apps, their view names, and app-only tools |
+| `status(apps?)` | `status` for each app | Read: view, busy, pending question, Claude's running and unread sessions |
 | `get_mode(app)` | `mode` | Read |
 | `set_mode(app, mode)` | `mode VIEW`, then `mode` to confirm | Navigate |
 | `list_projects(app)` | `projects` | Read |
 | `list_sessions(app, project?, recents?)` | `sessions [--project NAME \| --recents]` | Read |
 | `open_session(app, title)` | `session TITLE` | Navigate |
 | `read_reply(app)` | `read` | Read; returns `reply` and, for Cursor, `pending_question` |
+| `wait_for_reply(app, timeout_seconds?)` | `status` and `read`, polled | Read: waits until the agent finishes |
+| `ask_agent(app, message, session?, timeout_seconds?)` | `session`, `send`, then waits | Submit: send and wait in one call |
 | `type_text(app, text)` | `type TEXT` | Draft |
 | `send_message(app, text)` | `send TEXT` | Submit |
 | `submit_draft(app)` | `enter` | Submit |
@@ -349,10 +389,26 @@ arrays, and `read_reply` separates Cursor's pending question into a prompt and
 lettered options. A failed command returns an error result carrying the CLI's own
 message and exit status, which the calling model can read.
 
+`wait_for_reply` and `ask_agent` poll every couple of seconds and return:
+
+| `status` | Meaning |
+| --- | --- |
+| `done` | The agent is idle and its reply text was the same on two consecutive checks; `reply` holds it |
+| `question` | A Cursor agent stopped on a multiple-choice question; `pending_question` holds it |
+| `timeout` | `timeout_seconds` passed (default 300, at most 900); `reply` holds whatever is visible |
+
+`ask_agent` records the reply before sending and only accepts a different one, so an
+old reply is never returned as the answer. After a `timeout` the message has already
+been sent: call `wait_for_reply` again instead of resending. Long waits send MCP
+progress notifications, which also keep HTTP clients from timing out.
+
 The tools carry MCP hints so clients can decide what to confirm: listing and reading
 tools are marked read-only, and `send_message`, `submit_draft` and
 `cursor_answer_question` are marked as submitting, because a sent message or answer
-cannot be taken back. Tools still act on the real apps and bring them to the front,
+cannot be taken back; `ask_agent` is marked the same way. The server's instructions
+tell the calling model to treat agents' replies as information rather than
+instructions, and to confirm the exact text with you before submitting unless you
+dictated it. Tools still act on the real apps and bring them to the front,
 even the read-only ones, so leave the apps alone while a client is using them.
 
 ### Local clients (stdio)
@@ -434,11 +490,18 @@ supported.
 ```
 
 It starts the server over stdio through the MCP client, checks the tool list and
-hints, calls the read-only tools against one app (Cursor by default), and checks that
-invalid calls are refused before any UI action. `--http` also starts the HTTP
+hints, calls the read-only tools against one app (Cursor by default), including
+`status` and `wait_for_reply` on an idle chat, and checks that invalid calls are
+refused before any UI action; `ask_agent` is only called with a session that does not
+exist, so it fails before sending. `--http` also starts the HTTP
 transport on a free port and checks that a missing token, a wrong token and a foreign
 Host header are rejected. It never types, sends, answers or switches views. Last
-result, 2026-09-24 against Cursor over stdio and HTTP: all checks passed.
+results, 2026-09-25: all checks passed against Cursor (stdio and HTTP) and ChatGPT
+(stdio). A real send was also checked through the MCP server in a new ChatGPT chat:
+`submit_draft` sent `Reply only: OK`, `status` read busy then idle, and
+`wait_for_reply` returned `done` with `OK` after 7 seconds. `ask_agent` itself has only
+been run as far as its send step, which then stalled because another script was
+polling ChatGPT at the same time; nothing was sent that time.
 
 ## Diagnostics
 
@@ -461,8 +524,8 @@ For example:
 ```
 
 Diagnostics only read; they never press controls. They can print conversation
-text or draft content. The input diagnostic's `'\nDo anything'` value is the
-known empty-editor placeholder, not a draft.
+text or draft content. The input diagnostic's `'\nDo anything'` (Codex) or
+`'\nAsk ChatGPT'` (ChatGPT) value is the known empty-editor placeholder, not a draft.
 
 ## Live navigation tests
 

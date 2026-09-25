@@ -33,6 +33,12 @@ QUESTION_OPTIONS = ('ui-tray-option', 'composer-questionnaire-toolbar-option')
 QUESTION_CHROME = {'Question', 'Questions', 'Skip', 'Esc', 'Continue', 'of'}
 PAGING = re.compile(r'(show|view|load)\b.*\b(more|all)\b', re.IGNORECASE)
 INLINE_ROLES = {'AXButton', 'AXLink', 'AXStaticText'}
+# Idle, the Agents composer's submit button reads "Send message"; while the agent works,
+# a stop control takes its place. Only controls inside a composer count: the IDE's
+# debugger also has "Stop" buttons.
+STOP_LABEL = re.compile(r'(stop|cancel)( generating| generation| response| agent)?(\s*\(.*\)|\s+[^\w\s].*)?',
+                        re.IGNORECASE)  # Optional shortcut hint, e.g. "Stop (⌘⌫)"; not "Stop voice input".
+COMPOSER_AREAS = ('composer-bar', 'ui-prompt-input')
 
 
 def clean(text):
@@ -419,6 +425,28 @@ class Cursor(Walker):
             raise SidebarError('No agent reply text is exposed after the latest user message.')
         return output
 
+    def busy(self, window):
+        """True while the main window's agent chat is working; None without a visible composer."""
+        composer_seen = False
+        for n, role, anc in self.walk(window, self.LIMIT):
+            node_classes = classes(n)
+            if role == 'AXTextArea' and any(c in node_classes for c in COMPOSERS):
+                composer_seen = True
+            if role != 'AXButton':
+                continue
+            in_composer = ('ui-prompt-input-submit-button' in node_classes or any(
+                any(c.startswith(area) for c in classes(a) for area in COMPOSER_AREAS) for a in anc))
+            if in_composer and STOP_LABEL.fullmatch(clean(label(n))):
+                return True
+        return False if composer_seen else None
+
+    def status(self, mode):
+        window = self.main_window()
+        busy = self.busy(window)
+        question = self.question_state(window) is not None
+        return '\n'.join([f'mode: {mode}', 'busy: ' + {True: 'yes', False: 'no', None: 'unknown'}[busy],
+                          'question: ' + ('yes' if question else 'no')])
+
     # Commands
 
     def run(self, command, argument='', project=''):
@@ -429,6 +457,8 @@ class Cursor(Walker):
             return self.switch(argument)
         if command == 'debug-mode':
             return self.debug_mode()
+        if command == 'status':
+            return self.read(lambda: self.status(mode))
         if command == 'debug-sidebar':
             return self.debug_sidebar(mode)
         if command == 'projects':
@@ -606,13 +636,14 @@ tell application "System Events"
 end tell
 '''
 
-COMMANDS = ('mode', 'debug-mode', 'debug-sidebar', 'projects', 'project', 'sessions', 'session', 'answer',
+COMMANDS = ('mode', 'status', 'debug-mode', 'debug-sidebar', 'projects', 'project', 'sessions', 'session', 'answer',
             'read', 'type', 'send', 'enter', 'return')
 
 
 def usage():
     print('''Usage: ./agent_ctl.py --app cursor COMMAND [ARGS]
   mode [agents|ide]            Print or switch the view (Agents window or IDE window)
+  status                       View, whether the main window's agent is working, pending question
   projects                     Agents: sidebar repositories; IDE: open workspace windows
   sessions [--project NAME]    Agents: agent rows (expands repositories); IDE: open agent chat tabs
   project NAME                 Bring an IDE workspace window forward (switches to the IDE view)

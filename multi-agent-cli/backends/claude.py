@@ -471,6 +471,7 @@ def usage():
   ./agent_ctl.py sessions --project "alltalk"
   ./agent_ctl.py sessions --recents
   ./agent_ctl.py debug-sidebar
+  ./agent_ctl.py status             (view, busy yes/no, running and unread sessions)
   (Chat projects use the Projects page; Code projects are folders.)
   (Chat Recents follows Chats and tasks; Code Recents lists No folder.)
   ./agent_ctl.py debug-sessions
@@ -512,7 +513,7 @@ def main(args=None):
     elif cmd == "debug-sessions":
         print(osa(DEBUG_SESSIONS_SCRIPT))
 
-    elif cmd in ("projects", "sessions", "debug-sidebar"):
+    elif cmd in ("projects", "sessions", "debug-sidebar", "status"):
         # Native references survive sidebar rerenders without indexed paths.
         command, env = helper('claude_sidebar', *argv[1:])
         try:

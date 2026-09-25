@@ -5,6 +5,7 @@ Uses retained native AX references from ax_native. Only activation/PID lookup us
 from collections import Counter
 from dataclasses import dataclass
 import os
+import re
 import subprocess
 import sys
 import time
@@ -459,6 +460,25 @@ class Modes:
         return '' if emit else '\n'.join(lines)
 
 
+# While a reply streams, the composer's Send button is replaced by a stop control.
+STOP_LABEL = re.compile(r'stop( streaming| generating| response)?', re.IGNORECASE)
+
+
+def status(reader):
+    """Read-only: current view and whether the open conversation is still responding."""
+    _, mode = Modes(reader).control()
+    reader.STACK_BUDGET = 20000  # The whole window, including a long conversation.
+    sidebar = reader.locate()
+    busy = False
+    for node, role, ancestors in reader.walk(reader.main_window(), 20000):
+        if role != 'AXButton' or sidebar in ancestors:
+            continue  # A sidebar chat titled "Stop" is not a stop control.
+        if any(STOP_LABEL.fullmatch((node.get(key) or '').strip()) for key in ('AXDescription', 'AXTitle')):
+            busy = True
+            break
+    return f'mode: {mode}\nbusy: ' + ('yes' if busy else 'no')
+
+
 ACTIVATE = '''
 tell application id "com.openai.codex" to activate
 tell application "System Events"
@@ -471,7 +491,8 @@ end tell
 
 def main(args=None):
     args = sys.argv[1:] if args is None else args
-    if len(args) != 1 or args[0] not in ('sessions', 'projects', 'session', 'debug-sidebar', 'mode', 'debug-mode'):
+    if len(args) != 1 or args[0] not in ('sessions', 'projects', 'session', 'debug-sidebar', 'mode', 'debug-mode',
+                                         'status'):
         print('This helper is called by agent_ctl.py --app chatgpt.', file=sys.stderr)
         return 2
     try:
@@ -490,6 +511,8 @@ def main(args=None):
             result = Modes(reader).run(os.environ.get('CTL_ARG', ''))
         elif args[0] == 'debug-mode':
             result = Modes(reader).debug(emit=reader.log)
+        elif args[0] == 'status':
+            result = reader.read(lambda: status(reader))
         else:
             result = reader.run(args[0], os.environ.get('CTL_ARG', ''),
                                 os.environ.get('CTL_PROJECT', ''), os.environ.get('CTL_RECENTS') == '1')

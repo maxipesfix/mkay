@@ -302,11 +302,18 @@ on verifySubmission(target, appProcess)
     error "Return pressed, but prompt did not clear. Check the app before retrying."
 end verifySubmission
 
+-- The composer's label doubles as its placeholder: "Do anything" in Codex,
+-- "Ask ChatGPT" in ChatGPT (observed 2026-09-25).
+on composerLabels()
+    return {"Do anything", "Ask ChatGPT"}
+end composerLabels
+
 on emptyPrompt(textValue, el)
     if textValue is "" or textValue is linefeed or textValue is return then return true
-    -- Exact empty-editor sentinel observed in the user's AXValue diagnostic.
-    -- Do not discard arbitrary text or all values containing the placeholder.
-    if textValue is (linefeed & "Do anything") and my attr(el, "AXDescription") is "Do anything" then return true
+    -- An empty editor reports a newline plus its placeholder as AXValue. Match only that
+    -- exact sentinel, never arbitrary text that merely contains the placeholder.
+    set placeholder to my attr(el, "AXDescription")
+    if my composerLabels() contains placeholder and textValue is (linefeed & placeholder) then return true
     return false
 end emptyPrompt
 
@@ -318,7 +325,7 @@ end matchesInput
 on isComposer(el)
     with timeout of 1 second
         if my attr(el, "AXRole") is not "AXTextArea" then return false
-        return my attr(el, "AXDescription") is "Do anything"
+        return my composerLabels() contains my attr(el, "AXDescription")
     end timeout
 end isComposer
 
@@ -349,13 +356,13 @@ on locatePrompt(appProcess, win)
             end repeat
         end try
     end repeat
-    error "Could not find the Do anything input within 12 seconds / 1200 controls. Nothing entered."
+    error "Could not find the ChatGPT/Codex message input within 12 seconds / 1200 controls. Nothing entered."
 end locatePrompt
 '''
 INPUT_COMMON = LOCATE_PROMPT + COMMON.replace("        set elems to entire contents of win", "        set elems to {}")
 
 INPUT = r'''
-log "Locating the Do anything input..."
+log "Locating the message input..."
 set target to my locatePrompt(appProcess, win)
 log "Found input; checking draft..."
 set inputText to system attribute "CTL_ARG"
@@ -410,7 +417,7 @@ end timeout
 return draft
 '''
 
-SCRIPTS = {"mode": None, "debug-mode": None, "debug-ui": DEBUG, "debug-focus": FOCUS, "debug-input": INSPECT_INPUT, "debug-read": DEBUG_READ,
+SCRIPTS = {"mode": None, "status": None, "debug-mode": None, "debug-ui": DEBUG, "debug-focus": FOCUS, "debug-input": INSPECT_INPUT, "debug-read": DEBUG_READ,
            "sessions": None, "session": None, "projects": None, "debug-sidebar": None, "read": READ,
            "type": INPUT, "send": INPUT, "enter": INPUT, "return": INPUT}
 
@@ -419,7 +426,7 @@ def main(argv=None):
     args = list(sys.argv[1:] if argv is None else argv)
     if not args or args[0] in ("-h", "--help", "help"):
         print('Usage: ./agent_ctl.py --app chatgpt COMMAND [TEXT]\n'
-              'Commands: mode [chatgpt|codex] (chat/code also accepted), debug-mode, debug-ui, debug-focus, debug-input, debug-read, debug-sidebar, projects, sessions,\n'
+              'Commands: mode [chatgpt|codex] (chat/code also accepted), status, debug-mode, debug-ui, debug-focus, debug-input, debug-read, debug-sidebar, projects, sessions,\n'
               '          session "title", read, type "text", send "text", enter, return\n'
               '          sessions --project "GenAx" (expands that project if collapsed)\n'
               '          sessions --recents (only rows under Recents; expands it if collapsed)\n'
@@ -510,9 +517,10 @@ def main(argv=None):
         print("Characters: " + ", ".join(
             f"U+{ord(c):04X} {unicodedata.name(c, 'CONTROL')}" for c in raw[:160]))
         return 0
-    if cmd in ("sessions", "session", "projects", "debug-sidebar", "mode", "debug-mode"):
+    if cmd in ("sessions", "session", "projects", "debug-sidebar", "mode", "debug-mode", "status"):
         sidebar_timeout = 75 if project_name or recents_only or cmd == "projects" else 45
-        operation = "Inspecting ChatGPT/Codex mode" if cmd in ("mode", "debug-mode") else "Reading ChatGPT sidebar"
+        operation = ("Inspecting ChatGPT/Codex mode" if cmd in ("mode", "debug-mode") else
+                     "Reading ChatGPT status" if cmd == "status" else "Reading ChatGPT sidebar")
         print(f"{operation} ({sidebar_timeout}-second limit)...", file=sys.stderr, flush=True)
         argv, env = helper('chatgpt_sidebar', cmd)
         env.update(CTL_CMD=cmd, CTL_ARG=arg, CTL_PROJECT=project_name, CTL_RECENTS="1" if recents_only else "0")
