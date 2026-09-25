@@ -5,8 +5,8 @@
 # ///
 """MCP server exposing agent_ctl.py: control Claude, ChatGPT/Codex and Cursor desktop apps.
 
-Every tool runs the tested CLI (agent_ctl.py) as a child process, one at a time,
-so MCP clients get exactly the CLI's behavior, safety checks and timeouts.
+Every tool runs the tested CLI (../multi-agent-cli/agent_ctl.py, or AGENT_CTL) as a child
+process, one at a time, so MCP clients get exactly the CLI's behavior, safety checks and timeouts.
 
 Transports:
   stdio  For MCP clients on this Mac (Claude Desktop, Claude Code, Cursor).
@@ -20,9 +20,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 import hmac
+import json
 import os
 import re
 import secrets
+import subprocess
 import sys
 from pathlib import Path
 from typing import Literal
@@ -34,16 +36,30 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
 
-ROOT = Path(__file__).resolve().parent
-CLI = ROOT / 'agent_ctl.py'
-sys.path.insert(0, str(ROOT))
-from backends import APPS, VIEWS  # noqa: E402
+# The CLI is the only contract with ../multi-agent-cli: its commands and `apps --json`.
+CLI = Path(os.environ.get('AGENT_CTL') or Path(__file__).resolve().parent.parent / 'multi-agent-cli' / 'agent_ctl.py')
+
+
+def load_apps() -> dict[str, list[tuple[str, str]]]:
+    """Each app's views as (mode argument, `mode` output) pairs, from the CLI itself."""
+    if not CLI.is_file():
+        raise SystemExit(f'agent_ctl.py not found at {CLI}; set AGENT_CTL to its path.')
+    result = subprocess.run([sys.executable, str(CLI), 'apps', '--json'], capture_output=True, text=True, timeout=30)
+    if result.returncode:
+        raise SystemExit(f'{CLI} apps --json failed: {result.stderr.strip()}')
+    return {entry['app']: [tuple(view) for view in entry['views']] for entry in json.loads(result.stdout)['apps']}
+
+
+VIEWS = load_apps()
+APPS = tuple(VIEWS)
 
 # A CLI command has its own internal limits; this only stops a stuck child process.
 COMMAND_TIMEOUT = 150
 DEFAULT_TOKEN_FILE = Path.home() / '.config' / 'agent-mcp' / 'token'
 
 App = Literal['claude', 'chatgpt', 'cursor']
+if set(APPS) != set(App.__args__):
+    raise SystemExit(f'agent_ctl.py offers apps {APPS}; update App in agent_mcp.py to match.')
 
 INSTRUCTIONS = """\
 Controls the Claude, ChatGPT/Codex and Cursor desktop apps on the user's Mac through their
@@ -234,10 +250,15 @@ async def progress(ctx: Context | None, elapsed: float, total: float, message: s
 
 
 async def try_read(app: str) -> str | None:
+    text, _ = await read_or_error(app)
+    return text
+
+
+async def read_or_error(app: str) -> tuple[str | None, str | None]:
     try:
-        return await run_cli(app, 'read')
-    except ToolError:
-        return None  # No reply exposed yet, e.g. a new conversation.
+        return await run_cli(app, 'read'), None
+    except ToolError as error:
+        return None, str(error)  # No reply exposed yet, or no conversation open.
 
 
 async def wait_until_done(app: str, timeout: float, poll: float, previous: str | None,
@@ -251,12 +272,17 @@ async def wait_until_done(app: str, timeout: float, poll: float, previous: str |
     loop = asyncio.get_running_loop()
     start = loop.time()
     last = None
+    failed_reads = 0
     await asyncio.sleep(min(2.0, timeout))  # Let a just-sent message register as busy.
     while True:
         elapsed = loop.time() - start
         state = parse_status(app, await run_cli(app, 'status'))
         if not state.busy or state.pending_question:
-            text = await try_read(app)
+            text, error = await read_or_error(app)
+            failed_reads = failed_reads + 1 if text is None else 0
+            if failed_reads >= 2:
+                # Idle with nothing readable twice running: no conversation to wait for.
+                raise ToolError('Nothing to wait for: ' + error)
             reply, question = split_question(text or '')
             if question is not None:
                 return Waited(app=app, status='question', reply=reply, pending_question=question,

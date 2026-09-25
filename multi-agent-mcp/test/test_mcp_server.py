@@ -66,8 +66,13 @@ async def exercise(client, app):
     if entry.get('busy') is False and not entry.get('pending_question'):
         waited = await client.call_tool('wait_for_reply', {'app': app, 'timeout_seconds': 60})
         result = waited.structured_content or {}
-        check(not waited.is_error and result.get('status') == 'done',
-              f"wait_for_reply({app}) on an idle chat: {result.get('status')} after {result.get('waited_seconds')}s")
+        if waited.is_error:
+            # Idle with no conversation open: must fail fast with the reason, not time out.
+            check('Nothing to wait for' in waited.content[0].text,
+                  f'wait_for_reply({app}) without a conversation reports it: {waited.content[0].text[:100]}')
+        else:
+            check(result.get('status') == 'done',
+                  f"wait_for_reply({app}) on an idle chat: {result.get('status')} after {result.get('waited_seconds')}s")
     else:
         print(f'SKIP: wait_for_reply({app}) needs an idle chat without a pending question', flush=True)
     reply = await client.call_tool('read_reply', {'app': app})

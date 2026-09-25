@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Control AI desktop apps on macOS: ./agent_ctl.py [--app claude|chatgpt|cursor] COMMAND ..."""
 import importlib
+import json
 import os
 import sys
 
@@ -17,9 +18,10 @@ Claude is the default app. Put --app before the command.
 Views:
 {views}
 
-Commands: mode [VIEW], projects, sessions [--project NAME | --recents],
+Commands: mode [VIEW], status, projects, sessions [--project NAME | --recents],
           session "title", read, type "text", send "text", enter, debug-mode, debug-sidebar
-Run ./agent_ctl.py --app APP help for app-specific commands and diagnostics.""")
+Run ./agent_ctl.py --app APP help for app-specific commands and diagnostics.
+./agent_ctl.py apps --json prints the apps and their views as JSON (for programs).""")
 
 
 def main(argv=None):
@@ -36,6 +38,11 @@ def main(argv=None):
         args = args[2:]
     elif args[:1] in (['-h'], ['--help']):
         usage()
+        return 0
+    elif args == ['apps', '--json']:
+        # Machine-readable app list: each app's views as [mode argument, `mode` output] pairs.
+        print(json.dumps({'apps': [{'app': app, 'views': [list(pair) for pair in VIEWS[app]]}
+                                   for app in APPS]}))
         return 0
     backend = importlib.import_module('backends.' + app)
     return backend.main(args) or 0

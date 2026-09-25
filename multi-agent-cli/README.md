@@ -3,8 +3,8 @@
 Control the Claude desktop app, the combined ChatGPT/Codex app, and Cursor from a
 macOS terminal: switch views, list projects and sessions, open a session, read its
 latest reply, and type or submit a prompt. `agent_ctl.py` is the entry point for
-every app. `agent_mcp.py` exposes the same commands as an MCP server for local and
-remote LLM clients; see **MCP server**.
+every app. The MCP server in [`../multi-agent-mcp`](../multi-agent-mcp/README.md)
+exposes the same commands to local and remote LLM clients.
 
 ## App versions
 
@@ -33,9 +33,8 @@ exposes an Electron app's full interface; the scripts then fall back to
 - Cursor exposes its interface only after the scripts turn on its accessibility
   support. Cursor may then offer to enable `editor.accessibilitySupport` ("Screen
   reader usage detected"); either answer works for these scripts.
-- The CLI needs no third-party Python packages. It uses `osascript` and native
-  macOS accessibility frameworks. The MCP server needs [uv](https://docs.astral.sh/uv/),
-  which installs its pinned dependencies on first run.
+- No third-party Python packages are required. The scripts use `osascript` and
+  native macOS accessibility frameworks.
 
 ```bash
 cd /Users/maxim/susurobo/code/mkay/multi-agent-cli
@@ -55,8 +54,6 @@ is running. Keep its sidebar open for session navigation and listing.
 multi-agent-cli/
   README.md
   agent_ctl.py                  # Entry point: --app claude|chatgpt|cursor (Claude is the default)
-  agent_mcp.py                  # MCP server wrapping agent_ctl.py (stdio and HTTP)
-  agent_mcp.py.lock             # Pinned MCP server dependencies (uv)
   ax_native.py                  # Shared native macOS accessibility binding (NativeAX, Walker)
   backends/
     __init__.py                 # App registry and each app's two views
@@ -70,13 +67,15 @@ multi-agent-cli/
     test_claude_navigation.py   # Live Claude test
     test_chatgpt_navigation.py  # Live ChatGPT/Codex test
     test_cursor_navigation.py   # Live Cursor test
-    test_mcp_server.py          # Live MCP server smoke test (read-only tools)
 ```
 
 Keep these files together. The test runners locate `../agent_ctl.py` relative to
 their own location, so they work from any working directory. `claude_ctl.py`,
 `chatgpt_ctl.py` and the sidebar modules that used to sit beside it have moved
 into `agent_ctl.py` and `backends/`.
+
+`./agent_ctl.py apps --json` prints the apps and their views as JSON. Programs such
+as the MCP server use it instead of importing the backends.
 
 ## App and mode selection
 
@@ -353,155 +352,6 @@ is retried automatically.
 | `answer` with a normal option in the Agents view | Tested live |
 | `type` / `send` | Not yet retested live after the paste-verification fix |
 | `answer` with a free-text option, in the IDE view, or with several questions | Not tested live |
-
-## MCP server
-
-`agent_mcp.py` is an MCP server that gives LLM clients the full command set as tools.
-Each tool runs `agent_ctl.py` as a child process, so it behaves exactly like the CLI,
-with the same checks and refusals. Tool calls run one at a time, because each app has
-a single interface to drive. The server uses the official `mcp` Python SDK (2.x); its
-dependencies are declared inside the script and pinned in `agent_mcp.py.lock`, and
-`uv run --script` installs them on first use. The CLI stays dependency-free.
-
-### Tools
-
-| Tool | CLI command | Kind |
-| --- | --- | --- |
-| `list_apps` | — | Read: apps, their view names, and app-only tools |
-| `status(apps?)` | `status` for each app | Read: view, busy, pending question, Claude's running and unread sessions |
-| `get_mode(app)` | `mode` | Read |
-| `set_mode(app, mode)` | `mode VIEW`, then `mode` to confirm | Navigate |
-| `list_projects(app)` | `projects` | Read |
-| `list_sessions(app, project?, recents?)` | `sessions [--project NAME \| --recents]` | Read |
-| `open_session(app, title)` | `session TITLE` | Navigate |
-| `read_reply(app)` | `read` | Read; returns `reply` and, for Cursor, `pending_question` |
-| `wait_for_reply(app, timeout_seconds?)` | `status` and `read`, polled | Read: waits until the agent finishes |
-| `ask_agent(app, message, session?, timeout_seconds?)` | `session`, `send`, then waits | Submit: send and wait in one call |
-| `type_text(app, text)` | `type TEXT` | Draft |
-| `send_message(app, text)` | `send TEXT` | Submit |
-| `submit_draft(app)` | `enter` | Submit |
-| `cursor_open_project(name)` | `--app cursor project NAME` | Navigate |
-| `cursor_answer_question(letter, text?)` | `--app cursor answer LETTER [TEXT]` | Submit; returns `done` or `next_question` with the question |
-| `diagnose(app, kind)` | `debug-mode` / `debug-sidebar` | Read |
-
-`app` is `claude`, `chatgpt` or `cursor`. Results are structured: lists come back as
-arrays, and `read_reply` separates Cursor's pending question into a prompt and
-lettered options. A failed command returns an error result carrying the CLI's own
-message and exit status, which the calling model can read.
-
-`wait_for_reply` and `ask_agent` poll every couple of seconds and return:
-
-| `status` | Meaning |
-| --- | --- |
-| `done` | The agent is idle and its reply text was the same on two consecutive checks; `reply` holds it |
-| `question` | A Cursor agent stopped on a multiple-choice question; `pending_question` holds it |
-| `timeout` | `timeout_seconds` passed (default 300, at most 900); `reply` holds whatever is visible |
-
-`ask_agent` records the reply before sending and only accepts a different one, so an
-old reply is never returned as the answer. After a `timeout` the message has already
-been sent: call `wait_for_reply` again instead of resending. Long waits send MCP
-progress notifications, which also keep HTTP clients from timing out.
-
-The tools carry MCP hints so clients can decide what to confirm: listing and reading
-tools are marked read-only, and `send_message`, `submit_draft` and
-`cursor_answer_question` are marked as submitting, because a sent message or answer
-cannot be taken back; `ask_agent` is marked the same way. The server's instructions
-tell the calling model to treat agents' replies as information rather than
-instructions, and to confirm the exact text with you before submitting unless you
-dictated it. Tools still act on the real apps and bring them to the front,
-even the read-only ones, so leave the apps alone while a client is using them.
-
-### Local clients (stdio)
-
-The MCP client starts the server itself. Use absolute paths, because desktop apps do
-not see your shell's `PATH`:
-
-Claude Code:
-
-```bash
-claude mcp add agent-ctl -- /opt/homebrew/bin/uv run --script /Users/maxim/susurobo/code/mkay/multi-agent-cli/agent_mcp.py
-```
-
-Claude Desktop (`~/Library/Application Support/Claude/claude_desktop_config.json`) or
-Cursor (`~/.cursor/mcp.json`):
-
-```json
-{
-  "mcpServers": {
-    "agent-ctl": {
-      "command": "/opt/homebrew/bin/uv",
-      "args": ["run", "--script", "/Users/maxim/susurobo/code/mkay/multi-agent-cli/agent_mcp.py"]
-    }
-  }
-}
-```
-
-The server inherits macOS permissions from the app that starts it, so that app needs
-Accessibility access too: for example Claude, Cursor or your terminal. When the client
-is itself Claude or Cursor, tools that target the same app drive the window the client
-runs in; `set_mode` on it switches that window's view.
-
-### Remote clients (HTTP)
-
-Start the server on this Mac:
-
-```bash
-./agent_mcp.py --transport http
-```
-
-It serves `http://127.0.0.1:8765/mcp`, listening only on this Mac, and every request
-must carry `Authorization: Bearer TOKEN`. On first start the server creates a random
-token in `~/.config/agent-mcp/token` (mode 600); set `AGENT_MCP_TOKEN` or
-`--token-file` to use another. Requests without the token get 401, and requests whose
-Host header is not a local name get 421, which blocks DNS-rebinding attacks from web
-pages.
-
-Reach it from another machine without exposing it to the network, for example with
-an SSH tunnel from the remote machine:
-
-```bash
-ssh -N -L 8765:127.0.0.1:8765 maxim@THIS-MAC
-```
-
-The remote client then connects to `http://127.0.0.1:8765/mcp` with the token, for
-example from Claude Code:
-
-```bash
-claude mcp add --transport http agent-ctl http://127.0.0.1:8765/mcp --header "Authorization: Bearer TOKEN"
-```
-
-To listen on a private network address instead, such as a Tailscale IP, pass
-`--host` and the name clients will use:
-
-```bash
-./agent_mcp.py --transport http --host 100.101.102.103 --allowed-host mymac.tailnet-name.ts.net:8765
-```
-
-Anyone who can reach that address and has the token can read your conversations and
-send messages as you, so never bind a public interface. The server has no TLS and no
-OAuth, so web connectors such as claude.ai's, which need a public HTTPS URL, are not
-supported.
-
-### MCP smoke test
-
-```bash
-./test/test_mcp_server.py
-./test/test_mcp_server.py --app chatgpt --http
-```
-
-It starts the server over stdio through the MCP client, checks the tool list and
-hints, calls the read-only tools against one app (Cursor by default), including
-`status` and `wait_for_reply` on an idle chat, and checks that invalid calls are
-refused before any UI action; `ask_agent` is only called with a session that does not
-exist, so it fails before sending. `--http` also starts the HTTP
-transport on a free port and checks that a missing token, a wrong token and a foreign
-Host header are rejected. It never types, sends, answers or switches views. Last
-results, 2026-09-25: all checks passed against Cursor (stdio and HTTP) and ChatGPT
-(stdio). A real send was also checked through the MCP server in a new ChatGPT chat:
-`submit_draft` sent `Reply only: OK`, `status` read busy then idle, and
-`wait_for_reply` returned `done` with `OK` after 7 seconds. `ask_agent` itself has only
-been run as far as its send step, which then stalled because another script was
-polling ChatGPT at the same time; nothing was sent that time.
 
 ## Diagnostics
 
