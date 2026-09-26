@@ -28,7 +28,7 @@ from mcp.client.streamable_http import streamable_http_client
 ROOT = Path(__file__).resolve().parent.parent
 SERVER = ROOT / 'agent_mcp.py'
 EXPECTED_TOOLS = {'list_apps', 'status', 'get_mode', 'set_mode', 'list_projects', 'list_sessions',
-                  'open_session', 'read_reply', 'wait_for_reply', 'ask_agent', 'type_text', 'send_message',
+                  'open_session', 'new_chat', 'read_reply', 'wait_for_reply', 'ask_agent', 'type_text', 'send_message',
                   'submit_draft', 'cursor_open_project', 'cursor_answer_question', 'diagnose'}
 
 failures = []
@@ -77,7 +77,9 @@ async def exercise(client, app):
         print(f'SKIP: wait_for_reply({app}) needs an idle chat without a pending question', flush=True)
     reply = await client.call_tool('read_reply', {'app': app})
     text = reply.content[0].text if reply.content else ''
-    check(not reply.is_error or 'No ' in text, f'read_reply({app}) returned or reported cleanly: {text[:80]!r}')
+    # An empty or missing conversation is a clean error ("No ... conversation", "Cannot identify ... reply").
+    clean = not reply.is_error or any(k in text for k in ('No ', 'Cannot identify', 'Nothing'))
+    check(clean, f'read_reply({app}) returned or reported cleanly: {text[:80]!r}')
 
     # Refusals: rejected before any UI action.
     bad_mode = await client.call_tool('set_mode', {'app': app, 'mode': 'nonsense'})
@@ -89,6 +91,11 @@ async def exercise(client, app):
     missing = await client.call_tool('ask_agent', {'app': app, 'message': 'must not be sent',
                                                    'session': 'no-such-session-title-xyz'})
     check(missing.is_error, 'ask_agent stops at an unknown session before sending: ' + missing.content[0].text[:90])
+    both_targets = await client.call_tool('ask_agent', {'app': app, 'message': 'must not be sent',
+                                                        'session': 'x', 'new_chat': True})
+    check(both_targets.is_error, 'ask_agent refuses session together with new_chat')
+    cursor_new = await client.call_tool('new_chat', {'app': 'cursor'})
+    check(cursor_new.is_error, 'new_chat is refused for apps without support: ' + cursor_new.content[0].text[:80])
     bad_app = await client.call_tool('get_mode', {'app': 'codex'})
     check(bad_app.is_error, 'get_mode refuses an unknown app')
     if app == 'cursor':

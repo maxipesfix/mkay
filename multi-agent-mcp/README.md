@@ -37,9 +37,10 @@ multi-agent-mcp/
 | `list_projects(app)` | `projects` | Read |
 | `list_sessions(app, project?, recents?)` | `sessions [--project NAME \| --recents]` | Read |
 | `open_session(app, title)` | `session TITLE` | Navigate |
+| `new_chat(app, project?)` | `new [--project NAME]` | Navigate; ChatGPT/Codex only for now |
 | `read_reply(app)` | `read` | Read; returns `reply` and, for Cursor, `pending_question` |
-| `wait_for_reply(app, timeout_seconds?)` | `status` and `read`, polled | Read: waits until the agent finishes |
-| `ask_agent(app, message, session?, timeout_seconds?)` | `session`, `send`, then waits | Submit: send and wait in one call |
+| `wait_for_reply(app, timeout_seconds?, session?)` | `status` and `read`, polled | Read: waits until the agent finishes |
+| `ask_agent(app, message, session?, new_chat?, project?, timeout_seconds?)` | `session` or `new`, `send`, then waits | Submit: send and wait in one call; `new_chat` starts a new conversation first (ChatGPT/Codex) |
 | `type_text(app, text)` | `type TEXT` | Draft |
 | `send_message(app, text)` | `send TEXT` | Submit |
 | `submit_draft(app)` | `enter` | Submit |
@@ -60,12 +61,19 @@ message and exit status, which the calling model can read.
 | `question` | A Cursor agent stopped on a multiple-choice question; `pending_question` holds it |
 | `timeout` | `timeout_seconds` passed (default 300, at most 900); `reply` holds whatever is visible |
 
-If the agent is idle and no reply can be read twice in a row, for example because no
-conversation is open, the call fails at once with `Nothing to wait for:` and the
-CLI's reason instead of waiting out the timeout.
+If the agent is idle and no reply can be read on consecutive checks, for example
+because no conversation is open, the call stops early with `Nothing to wait for:` and
+the CLI's reason instead of waiting out the timeout. It waits at least 8 seconds
+first, so a message just sent to a new chat has time to show as busy.
 
 `ask_agent` records the reply before sending and only accepts a different one, so an
-old reply is never returned as the answer. After a `timeout` the message has already
+old reply is never returned as the answer. For Claude, when the session is known
+(`ask_agent`'s or `wait_for_reply`'s `session`, or else the session last opened in that
+app through `open_session`, `ask_agent` or `new_chat`, which the server remembers until
+the view changes), the wait also continues
+while Claude's sidebar still marks that session as running. That covers the pauses
+between Claude Code tool calls, when the Stop button can briefly disappear and an
+early "Ran 2 commands" could otherwise look finished. After a `timeout` the message has already
 been sent: call `wait_for_reply` again instead of resending. Long waits send MCP
 progress notifications, which also keep HTTP clients from timing out.
 
@@ -163,9 +171,9 @@ refused before any UI action; `ask_agent` is only called with a session that doe
 exist, so it fails before sending. `--http` also starts the HTTP
 transport on a free port and checks that a missing token, a wrong token and a foreign
 Host header are rejected. It never types, sends, answers or switches views. Last
-results, 2026-09-25: all checks passed against Cursor (stdio and HTTP) and ChatGPT
-(stdio). A real send was also checked through the MCP server in a new ChatGPT chat:
-`submit_draft` sent `Reply only: OK`, `status` read busy then idle, and
-`wait_for_reply` returned `done` with `OK` after 7 seconds. `ask_agent` itself has only
-been run as far as its send step, which then stalled because another script was
-polling ChatGPT at the same time; nothing was sent that time.
+results, 2026-09-25: all checks passed against Cursor (stdio and HTTP), ChatGPT and
+Claude (stdio). Real sends through the server, from the voice client: `ask_agent` to a
+new ChatGPT chat (70 seconds with web search), to an existing ChatGPT session and to a
+Claude Code session; `type_text` then `submit_draft` to Claude; and `wait_for_reply`
+continuing through Claude's pauses between tool calls. No Cursor message has been sent
+through the server yet.

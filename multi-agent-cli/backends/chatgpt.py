@@ -218,55 +218,6 @@ log "Reply diagnostic complete."
 return ""
 '''
 
-READ = r'''
--- ChatGPT's heading and body are siblings, not one heading-parent subtree.
-set headingIndex to 0
-set headingLabel to ""
-repeat with i from (count elems) to 1 by -1
-    set el to item i of elems
-    if my attr(el, "AXRole") is "AXHeading" then
-        set t to my labelOf(el)
-        ignoring case
-            if t starts with "ChatGPT said" or t starts with "ChatGPT responded" or t starts with "Assistant said" or t starts with "Assistant responded" then
-                set headingIndex to i
-                set headingLabel to t
-                exit repeat
-            end if
-        end ignoring
-    end if
-end repeat
-if headingIndex is 0 then error "Cannot identify an assistant reply. Run --app chatgpt debug-read."
-set output to ""
-if headingIndex < (count elems) then
-    repeat with i from (headingIndex + 1) to (count elems)
-        set el to item i of elems
-        set r to my attr(el, "AXRole")
-        -- Rate/fork controls terminate the message; Copy also occurs INSIDE code
-        -- blocks and must not terminate reading.
-        if r is "AXTextArea" or r is "AXToolbar" then exit repeat
-        if r is "AXButton" then
-            set t to my labelOf(el)
-            if t is "Rate response" or t is "Fork chat from here" then exit repeat
-        end if
-        if r is "AXHeading" then
-            set t to my labelOf(el)
-            ignoring case
-                if t starts with "You said" or t starts with "ChatGPT said" or t starts with "ChatGPT responded" or t starts with "Assistant said" or t starts with "Assistant responded" then exit repeat
-            end ignoring
-        end if
-        if r is "AXStaticText" then
-            set t to my attr(el, "AXValue")
-            -- Skip only the heading's immediate accessibility text duplicate.
-            if not (i is (headingIndex + 1) and t is headingLabel) then
-                if t is not "" then set output to output & t & linefeed
-            end if
-        end if
-    end repeat
-end if
-if output is "" then error "Assistant heading found, but no reply text exposed. Run --app chatgpt debug-read."
-return output
-'''
-
 LOCATE_PROMPT = r'''
 on readDraft(el)
     with timeout of 2 seconds
@@ -302,18 +253,28 @@ on verifySubmission(target, appProcess)
     error "Return pressed, but prompt did not clear. Check the app before retrying."
 end verifySubmission
 
--- The composer's label doubles as its placeholder: "Do anything" in Codex,
--- "Ask ChatGPT" in ChatGPT (observed 2026-09-25).
+-- The composer's label doubles as its placeholder and varies with context: "Do anything"
+-- in Codex, "Ask ChatGPT" in a new chat, "Work with ChatGPT" in some conversations
+-- (observed 2026-09-25). Match those shapes; unlabeled editors (e.g. Markdown) never match.
 on composerLabels()
-    return {"Do anything", "Ask ChatGPT"}
+    return {"Do anything", "Ask ChatGPT", "Work with ChatGPT"}
 end composerLabels
+
+on isComposerLabel(labelText)
+    if labelText is "" then return false
+    if my composerLabels() contains labelText then return true
+    repeat with prefix in {"Ask ", "Work with ", "Message ", "Reply to "}
+        if labelText starts with (prefix as text) then return true
+    end repeat
+    return false
+end isComposerLabel
 
 on emptyPrompt(textValue, el)
     if textValue is "" or textValue is linefeed or textValue is return then return true
     -- An empty editor reports a newline plus its placeholder as AXValue. Match only that
     -- exact sentinel, never arbitrary text that merely contains the placeholder.
     set placeholder to my attr(el, "AXDescription")
-    if my composerLabels() contains placeholder and textValue is (linefeed & placeholder) then return true
+    if my isComposerLabel(placeholder) and textValue is (linefeed & placeholder) then return true
     return false
 end emptyPrompt
 
@@ -325,7 +286,7 @@ end matchesInput
 on isComposer(el)
     with timeout of 1 second
         if my attr(el, "AXRole") is not "AXTextArea" then return false
-        return my composerLabels() contains my attr(el, "AXDescription")
+        return my isComposerLabel(my attr(el, "AXDescription"))
     end timeout
 end isComposer
 
@@ -361,54 +322,6 @@ end locatePrompt
 '''
 INPUT_COMMON = LOCATE_PROMPT + COMMON.replace("        set elems to entire contents of win", "        set elems to {}")
 
-INPUT = r'''
-log "Locating the message input..."
-set target to my locatePrompt(appProcess, win)
-log "Found input; checking draft..."
-set inputText to system attribute "CTL_ARG"
-set commandName to system attribute "CTL_CMD"
-with timeout of 2 seconds
-    tell application "System Events" to set priorText to value of attribute "AXValue" of target as text
-end timeout
-if commandName is "type" or commandName is "send" then
-    if not my emptyPrompt(priorText, target) then error "Prompt already contains a draft; send or clear it first."
-else
-    if my emptyPrompt(priorText, target) then error "Prompt is empty; nothing submitted."
-end if
-tell application "System Events"
-    set value of attribute "AXFocused" of target to true
-    if (value of attribute "AXFocused" of target) is not true then error "Could not focus prompt."
-end tell
-if commandName is "type" or commandName is "send" then
-    -- Keep the clipboard intact even if input verification fails.
-    set oldClipboard to the clipboard as record
-    try
-        log "Pasting text..."
-        set the clipboard to inputText
-        tell application "System Events" to keystroke "v" using command down
-        set pasted to false
-        repeat 30 times
-            delay 0.1
-            set actualText to my attr(target, "AXValue")
-            if my matchesInput(actualText, inputText) then
-                set pasted to true
-                exit repeat
-            end if
-        end repeat
-        if not pasted then error "Could not verify pasted text; nothing submitted."
-    on error errText number errNum
-        set the clipboard to oldClipboard
-        error errText number errNum
-    end try
-    set the clipboard to oldClipboard
-end if
-if commandName is "type" then return "Typed and verified."
-tell application "System Events" to key code 36
-log "Return pressed; checking submission..."
--- Only reacquire and read after Return; never resend when confirmation fails.
-return my verifySubmission(target, appProcess)
-'''
-
 INSPECT_INPUT = r'''
 set target to my locatePrompt(appProcess, win)
 with timeout of 2 seconds
@@ -417,16 +330,16 @@ end timeout
 return draft
 '''
 
-SCRIPTS = {"mode": None, "status": None, "debug-mode": None, "debug-ui": DEBUG, "debug-focus": FOCUS, "debug-input": INSPECT_INPUT, "debug-read": DEBUG_READ,
-           "sessions": None, "session": None, "projects": None, "debug-sidebar": None, "read": READ,
-           "type": INPUT, "send": INPUT, "enter": INPUT, "return": INPUT}
+SCRIPTS = {"mode": None, "status": None, "new": None, "debug-mode": None, "debug-ui": DEBUG, "debug-focus": FOCUS, "debug-input": INSPECT_INPUT, "debug-read": DEBUG_READ,
+           "sessions": None, "session": None, "projects": None, "debug-sidebar": None, "read": None,
+           "type": None, "send": None, "enter": None, "return": None}
 
 
 def main(argv=None):
     args = list(sys.argv[1:] if argv is None else argv)
     if not args or args[0] in ("-h", "--help", "help"):
         print('Usage: ./agent_ctl.py --app chatgpt COMMAND [TEXT]\n'
-              'Commands: mode [chatgpt|codex] (chat/code also accepted), status, debug-mode, debug-ui, debug-focus, debug-input, debug-read, debug-sidebar, projects, sessions,\n'
+              'Commands: mode [chatgpt|codex] (chat/code also accepted), status, new [--project NAME], debug-mode, debug-ui, debug-focus, debug-input, debug-read, debug-sidebar, projects, sessions,\n'
               '          session "title", read, type "text", send "text", enter, return\n'
               '          sessions --project "GenAx" (expands that project if collapsed)\n'
               '          sessions --recents (only rows under Recents; expands it if collapsed)\n'
@@ -446,10 +359,10 @@ def main(argv=None):
             return 2
         recents_only = True
         args = [cmd]
-    if cmd == "sessions" and len(args) > 1 and args[1] == "--project":
+    if cmd in ("sessions", "new") and len(args) > 1 and args[1] == "--project":
         project_name = " ".join(args[2:]).strip()
         if not project_name:
-            print('sessions --project requires a project name.', file=sys.stderr)
+            print(f'{cmd} --project requires a project name.', file=sys.stderr)
             return 2
         args = [cmd]
     arg = " ".join(args[1:])
@@ -517,10 +430,14 @@ def main(argv=None):
         print("Characters: " + ", ".join(
             f"U+{ord(c):04X} {unicodedata.name(c, 'CONTROL')}" for c in raw[:160]))
         return 0
-    if cmd in ("sessions", "session", "projects", "debug-sidebar", "mode", "debug-mode", "status"):
+    if cmd in ("sessions", "session", "projects", "debug-sidebar", "mode", "debug-mode", "status", "new",
+               "read", "type", "send", "enter", "return"):
         sidebar_timeout = 75 if project_name or recents_only or cmd == "projects" else 45
         operation = ("Inspecting ChatGPT/Codex mode" if cmd in ("mode", "debug-mode") else
-                     "Reading ChatGPT status" if cmd == "status" else "Reading ChatGPT sidebar")
+                     "Reading ChatGPT status" if cmd == "status" else
+                     "Reading the latest ChatGPT reply" if cmd == "read" else
+                     "Entering text in ChatGPT" if cmd in ("type", "send", "enter", "return") else
+                     "Reading ChatGPT sidebar")
         print(f"{operation} ({sidebar_timeout}-second limit)...", file=sys.stderr, flush=True)
         argv, env = helper('chatgpt_sidebar', cmd)
         env.update(CTL_CMD=cmd, CTL_ARG=arg, CTL_PROJECT=project_name, CTL_RECENTS="1" if recents_only else "0")
@@ -532,18 +449,6 @@ def main(argv=None):
             return 1
         except KeyboardInterrupt:
             print("Sidebar lookup cancelled.", file=sys.stderr)
-            return 130
-    if cmd in ("type", "send", "enter", "return"):
-        print("Finding ChatGPT input (25-second limit)...", file=sys.stderr, flush=True)
-        try:
-            result = subprocess.run(['osascript', '-e', INPUT_COMMON + INPUT],
-                                    env=env, timeout=25)
-            return result.returncode
-        except subprocess.TimeoutExpired:
-            print("Stopped after 25 seconds. Check the draft before retrying; nothing will be retried automatically.", file=sys.stderr)
-            return 1
-        except KeyboardInterrupt:
-            print("Cancelled. Check the draft before retrying.", file=sys.stderr)
             return 130
     try:
         result = subprocess.run(['osascript', '-e', COMMON + SCRIPTS[cmd]],

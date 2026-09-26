@@ -82,14 +82,18 @@ class Cursor(Walker):
         current = self.read(self.mode)
         if current == wanted:
             return 'Already in ' + DISPLAY[wanted]
-        window = self.main_window()
-        if wanted == 'ide':
-            buttons = [n for n, role, _ in self.walk(window, self.LIMIT)
-                       if role == 'AXButton' and n.get('AXDescription') == 'IDE']
-        else:
-            buttons = [n for n, role, _ in self.walk(window, self.LIMIT)
-                       if role == 'AXButton' and 'open-agents-window-button' in classes(n)]
-        self.unique(buttons, DISPLAY[wanted] + ' switch button').press()
+        def find_button():
+            # A read can meet an element that vanished mid-scan (-25202); self.read retries
+            # the scan with fresh references. The press itself is never retried.
+            window = self.main_window()
+            if wanted == 'ide':
+                buttons = [n for n, role, _ in self.walk(window, self.LIMIT)
+                           if role == 'AXButton' and n.get('AXDescription') == 'IDE']
+            else:
+                buttons = [n for n, role, _ in self.walk(window, self.LIMIT)
+                           if role == 'AXButton' and 'open-agents-window-button' in classes(n)]
+            return self.unique(buttons, DISPLAY[wanted] + ' switch button')
+        self.read(find_button).press()
         for _ in range(15):
             time.sleep(0.2)
             try:

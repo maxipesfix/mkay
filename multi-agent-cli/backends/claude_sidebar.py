@@ -6,6 +6,7 @@ are folder groups; its unassigned sessions live in No folder. Session titles
 come from matched row/menu pairs, never from arbitrary button labels.
 """
 from dataclasses import dataclass
+import os
 import re
 import subprocess
 import sys
@@ -262,6 +263,104 @@ class ClaudeSidebar(Sidebar):
                     lines.append(f'{key}: {text[len(prefix):]}')
         return '\n'.join(lines)
 
+    # Conversation: native reading and input (the System Events versions walked the whole
+    # window element by element and took seconds; the primary pane walks in ~0.1 s).
+
+    def pane_rows(self):
+        return list(self.walk(self.region('Primary pane'), 60000))
+
+    def latest_reply(self):
+        """Static text of the last 'Claude responded:' block, as the AppleScript reader did:
+        within the heading's container, up to its toolbar or the next 'You said:'."""
+        rows = self.pane_rows()
+        start = next((i for i in range(len(rows) - 1, -1, -1) if rows[i][1] == 'AXHeading'
+                      and label(rows[i][0]).startswith('Claude responded:')), None)
+        if start is None:
+            raise SidebarError('No Claude response found.')
+        heading, container = label(rows[start][0]), (rows[start][2] or (None,))[-1]
+        lines, previous = [], None
+        for node, role, ancestors in rows[start + 1:]:
+            if container is not None and container not in ancestors:
+                break  # Left the response block.
+            if role == 'AXToolbar' or (role == 'AXHeading' and label(node).startswith('You said:')):
+                break
+            if role == 'AXStaticText':
+                text = node.get('AXValue')
+                if isinstance(text, str) and text and text != previous and not text.startswith('Claude responded:'):
+                    lines.append(text)
+                    previous = text
+        return '\n'.join(lines) if lines else heading
+
+    def composer(self):
+        areas = [n for n, role, _ in self.pane_rows() if role == 'AXTextArea']
+        prompts = [n for n in areas if n.get('AXDescription') == 'Prompt']
+        if len(prompts) == 1:
+            return prompts[0]
+        if not prompts and len(areas) == 1:
+            return areas[0]  # Older layouts lack the label; accept only a unique editor.
+        raise SidebarError('Cannot identify one Claude prompt text area. Close other editors and retry.')
+
+    @staticmethod
+    def draft(editor):
+        return (editor.get('AXValue') or '').strip('\n')
+
+    def focus_prompt(self):
+        # Focus lands a moment after it is set; retry with fresh references (harmless).
+        for _ in range(12):
+            try:
+                editor = self.composer()
+                editor.set_bool('AXFocused', True)
+                time.sleep(0.15)
+                if editor.get('AXFocused') is True:
+                    return editor
+            except (Changed, AXError):
+                time.sleep(0.15)
+        raise SidebarError('Could not focus Claude prompt; nothing entered.')
+
+    def input(self, command, text=''):
+        editor = self.read(self.composer)
+        if command in ('type', 'send'):
+            if self.draft(editor):
+                raise SidebarError('Prompt already contains a draft; send or clear it first.')
+        elif not self.draft(editor):
+            raise SidebarError('Prompt is empty; nothing submitted.')
+        self.focus_prompt()
+        if command in ('type', 'send'):
+            keys('paste', text)
+            expected = ' '.join(text.split())
+            for _ in range(40):
+                try:
+                    if ' '.join(self.draft(self.composer()).split()) == expected:
+                        break
+                except (Changed, AXError):
+                    pass
+                time.sleep(0.1)
+            else:
+                raise SidebarError('Could not verify text in Claude prompt; nothing submitted.')
+            if command == 'type':
+                return 'Typed.'
+            self.focus_prompt()
+        keys('return')
+        for _ in range(40):
+            time.sleep(0.1)
+            try:
+                if not self.draft(self.composer()):
+                    return 'Sent.'
+            except (Changed, AXError, SidebarError):
+                pass
+        raise SidebarError('Return pressed, but the prompt did not clear. Check Claude before retrying; '
+                           'the message may already be sent.')
+
+    def open_session(self, query):
+        """Press a sidebar session row: exact title first, else the first title containing it."""
+        items = self.read(lambda: self.sidebar_sessions(self.region('Sidebar')))
+        exact = [i for i in items if i.title.casefold() == query.casefold()]
+        matches = exact or [i for i in items if query.casefold() in i.title.casefold()]
+        if not matches:
+            raise LookupError(query)
+        matches[0].node.press()
+        return 'Opened: ' + matches[0].title
+
     def run(self, command, project='', recents=False):
         mode = self.read(self.mode)
         if command == 'debug-sidebar':
@@ -292,6 +391,41 @@ class ClaudeSidebar(Sidebar):
         return '\n'.join(names)
 
 
+KEYS = '''
+tell application id "com.anthropic.claudefordesktop" to activate
+delay 0.1
+tell application "System Events"
+    set frontBundle to bundle identifier of first application process whose frontmost is true
+end tell
+if frontBundle is not "com.anthropic.claudefordesktop" then error "Claude is not frontmost; no keys were sent."
+if (system attribute "CTL_KEY") is "paste" then
+    -- Clipboard paste handles long, multiline and Unicode text; restore the clipboard afterwards.
+    set oldClipboard to missing value
+    try
+        set oldClipboard to the clipboard as record
+    end try
+    try
+        set the clipboard to (system attribute "CTL_PASTE")
+        tell application "System Events" to keystroke "v" using command down
+        delay 0.4
+    on error errText number errNum
+        if oldClipboard is not missing value then set the clipboard to oldClipboard
+        error errText number errNum
+    end try
+    if oldClipboard is not missing value then set the clipboard to oldClipboard
+else
+    tell application "System Events" to key code 36
+end if
+'''
+
+
+def keys(action, text=''):
+    env = dict(os.environ, CTL_KEY=action, CTL_PASTE=text)
+    result = subprocess.run(['osascript', '-e', KEYS], env=env, capture_output=True, text=True, timeout=15)
+    if result.returncode:
+        raise SidebarError(result.stderr.strip() or 'Keyboard input failed.')
+
+
 ACTIVATE = '''tell application "Claude" to activate
 tell application "System Events" to tell process "Claude"
     set frontmost to true
@@ -301,11 +435,14 @@ end tell'''
 
 def main(args=None):
     args = list(sys.argv[1:] if args is None else args)
-    if not args or args[0] not in ('projects', 'sessions', 'debug-sidebar', 'status'):
+    conversation = ('read', 'type', 'send', 'enter', 'return', 'session')
+    if not args or args[0] not in ('projects', 'sessions', 'debug-sidebar', 'status') + conversation:
         print('Use agent_ctl.py --app claude projects or sessions [--project NAME | --recents].', file=sys.stderr)
         return 2
     command, project, recents = args[0], '', False
-    if command == 'sessions' and args[1:2] == ['--project'] and len(args) == 3 and args[2].strip():
+    if command in conversation:
+        pass
+    elif command == 'sessions' and args[1:2] == ['--project'] and len(args) == 3 and args[2].strip():
         project = args[2]
     elif command == 'sessions' and args[1:] == ['--recents']:
         recents = True
@@ -320,7 +457,18 @@ def main(args=None):
         app = api.application(int(result.stdout.strip()))
         time.sleep(0.2)
         reader = ClaudeSidebar(app, seconds=65)
-        print(reader.run(command, project, recents))
+        text = ' '.join(args[1:])
+        if command == 'read':
+            print(reader.read(reader.latest_reply))
+        elif command == 'session':
+            try:
+                print(reader.open_session(text))
+            except LookupError:
+                return 3  # Not in the sidebar: the caller falls back to a whole-window search.
+        elif command in ('type', 'send', 'enter', 'return'):
+            print(reader.input('enter' if command == 'return' else command, text))
+        else:
+            print(reader.run(command, project, recents))
         return 0
     except (SidebarError, ValueError, OSError, subprocess.SubprocessError) as error:
         print(str(error), file=sys.stderr)

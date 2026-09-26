@@ -57,10 +57,10 @@ multi-agent-cli/
   ax_native.py                  # Shared native macOS accessibility binding (NativeAX, Walker)
   backends/
     __init__.py                 # App registry and each app's two views
-    claude.py                   # Claude commands (AppleScript)
-    claude_sidebar.py           # Claude project and session lists (native AX)
-    chatgpt.py                  # Combined ChatGPT/Codex commands (AppleScript)
-    chatgpt_sidebar.py          # Combined-app mode and sidebar (native AX)
+    claude.py                   # Claude entry point, mode switching and AppleScript diagnostics
+    claude_sidebar.py           # Claude lists, status, read, input and session opening (native AX)
+    chatgpt.py                  # Combined ChatGPT/Codex entry point and AppleScript diagnostics
+    chatgpt_sidebar.py          # Combined-app mode, sidebar, read and input (native AX)
     cursor.py                   # Cursor: every command through native AX
   test/
     navigation.py               # Shared live navigation test runner
@@ -112,6 +112,7 @@ messages that contain spaces.
 | `sessions --project "NAME"` | ✅ | ✅ | ✅ |
 | `sessions --recents` | ✅ | ✅ | Refused (exit 2) |
 | `status` | ✅ | ✅ | ✅ |
+| `new [--project NAME]` | — | ✅ | — |
 | `session "TITLE"` | ✅ | ✅ | ✅ |
 | `project "NAME"` | — | — | ✅ |
 | `read` | ✅ | ✅ | ✅ |
@@ -129,6 +130,7 @@ messages that contain spaces.
 | `session "TITLE"` | Opens a session matching the title |
 | `read` | Prints the latest assistant reply in the selected conversation |
 | `status` | Read-only: view, whether the open conversation is still working, and more; see below |
+| `new [--project "NAME"]` | ChatGPT/Codex: opens a new, empty conversation (inside the project if given) by pressing the sidebar's New chat button, and checks that the old conversation cleared |
 | `type "TEXT"` | Pastes and verifies text in the empty prompt box without submitting |
 | `send "TEXT"` | Pastes and verifies text, then presses Return to submit |
 | `enter` | Submits the existing draft |
@@ -204,11 +206,15 @@ Claude Chat project listing opens the Projects page; listing a project's session
 opens that project page. This can change what is shown in the main pane.
 Listings reflect exposed app content, not a complete account-history export.
 
-The combined-app project reader remains experimental. It can include controls such
-as “New chat in NAME” or “Show more” as session names, and it prints the visible
-rows only, so long lists stop at what the sidebar shows. Titles can contain HTML
-entities such as `&amp;`. A passing navigation test does not prove that every
-returned name is a conversation.
+In ChatGPT and Codex, `projects` presses the **Show more** at the end of the Projects
+list until every project is shown, and `sessions --project NAME` presses that
+project's own **Show more** until all its chats are listed (at most 25 presses each;
+paging stops as soon as a press reveals nothing new). Pressing Show more leaves the
+lists expanded in the app. Paging controls and each project's "New chat in …" button
+are never reported as sessions. The unfiltered `sessions` and `sessions --recents`
+still list only the rows already shown. Titles can contain HTML entities such as
+`&amp;`. A passing navigation test does not prove that every returned name is a
+conversation.
 
 ### Read, type, and submit
 
@@ -233,7 +239,15 @@ clipboard afterward. `send` presses Return only after the pasted text is verifie
 if verification fails, nothing is submitted, but the text may already be in the
 prompt box. Claude's `Sent.` means verified text followed by Return; the combined
 app and Cursor also check that the prompt clears. No app waits for a completed
-assistant response. `read` may return partial text while the reply is streaming,
+assistant response.
+
+Claude, ChatGPT and Codex read replies and enter text through native accessibility
+calls: a reply reads in about a second (Claude about half a second), where the earlier
+System Events versions took several seconds to a minute on long conversations.
+Claude's `session` also opens sidebar rows natively and falls back to a whole-window
+search only for titles that are not in the sidebar, such as links on a project page.
+Before pasting, the input is focused and the focus confirmed, retrying for up to two
+seconds while the app comes forward or a newly opened conversation renders. `read` may return partial text while the reply is streaming,
 and its line breaks reflect accessibility text fragments.
 
 If submission times out or cannot be confirmed, inspect the app before retrying

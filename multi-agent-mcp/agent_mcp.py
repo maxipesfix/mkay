@@ -94,6 +94,9 @@ SUBMIT = ToolAnnotations(read_only_hint=False, destructive_hint=True, idempotent
                          open_world_hint=True)
 
 _lock = asyncio.Lock()  # The apps have one UI each: never drive them concurrently.
+# The session last opened in each app through these tools, so waits can use Claude's
+# per-session "Running" marker even when the caller does not repeat the title.
+_open_session: dict[str, str] = {}
 
 
 async def run_cli(app: str, *args: str) -> str:
@@ -111,7 +114,9 @@ async def run_cli(app: str, *args: str) -> str:
             raise ToolError(f'{" ".join(args)} timed out after {COMMAND_TIMEOUT}s and was stopped. '
                             'Check the app before retrying; nothing was retried.')
     out = stdout.decode(errors='replace').strip()
-    err = stderr.decode(errors='replace').strip()
+    # Drop progress lines such as "Reading ChatGPT sidebar (45-second limit)..." from errors.
+    err = '\n'.join(line for line in stderr.decode(errors='replace').splitlines()
+                    if line.strip() and not line.rstrip().endswith('...')).strip()
     if process.returncode:
         raise ToolError((err or out or 'Command failed.') + f' (exit status {process.returncode})')
     return out
@@ -261,8 +266,17 @@ async def read_or_error(app: str) -> tuple[str | None, str | None]:
         return None, str(error)  # No reply exposed yet, or no conversation open.
 
 
+def still_running(state: AppStatus, session: str | None) -> bool:
+    """Claude's sidebar marks a session 'Running' for its whole turn, including the pauses
+    between tool calls when the composer's Stop control can briefly disappear."""
+    if not session:
+        return False
+    wanted = session.casefold()
+    return any(wanted in name.casefold() or name.casefold() in wanted for name in state.running)
+
+
 async def wait_until_done(app: str, timeout: float, poll: float, previous: str | None,
-                          ctx: Context | None) -> Waited:
+                          ctx: Context | None, session: str | None = None) -> Waited:
     """Poll status and read until the agent is idle and its reply stops changing.
 
     Done means: not busy, and the same reply text on two consecutive idle checks. With
@@ -277,11 +291,15 @@ async def wait_until_done(app: str, timeout: float, poll: float, previous: str |
     while True:
         elapsed = loop.time() - start
         state = parse_status(app, await run_cli(app, 'status'))
+        if state.busy is not True and still_running(state, session):
+            state.busy = True
         if not state.busy or state.pending_question:
             text, error = await read_or_error(app)
             failed_reads = failed_reads + 1 if text is None else 0
-            if failed_reads >= 2:
-                # Idle with nothing readable twice running: no conversation to wait for.
+            if failed_reads >= 2 and elapsed >= 8:
+                # Idle with nothing readable on consecutive checks: no conversation to wait for.
+                # The grace period covers a just-sent message in a new chat before the app
+                # shows its busy state.
                 raise ToolError('Nothing to wait for: ' + error)
             reply, question = split_question(text or '')
             if question is not None:
@@ -342,6 +360,7 @@ async def set_mode(app: App, mode: str) -> Mode:
     For Cursor, "ide" lets Cursor pick the IDE window; use cursor_open_project for a specific one.
     """
     message = await run_cli(app, 'mode', check_mode(app, mode))
+    _open_session.pop(app, None)  # A different view shows a different conversation.
     return Mode(app=app, mode=await run_cli(app, 'mode'), message=message)
 
 
@@ -375,7 +394,24 @@ async def list_sessions(app: App, project: str | None = None, recents: bool = Fa
 async def open_session(app: App, title: str) -> Result:
     """Open a session by title in the current view (Claude: first title containing it;
     ChatGPT and Cursor: exact title, else a unique substring). Needed before reading or sending."""
-    return Result(app=app, message=await run_cli(app, 'session', title))
+    message = await run_cli(app, 'session', title)
+    _open_session[app] = title
+    return Result(app=app, message=message)
+
+
+@mcp.tool(annotations=NAVIGATE)
+async def new_chat(app: App, project: str | None = None) -> Result:
+    """Open a new, empty conversation, optionally inside a project. ChatGPT/Codex only for now.
+
+    Uses the current view (ChatGPT or Codex); the project must be visible in the sidebar
+    (names as in list_projects). Nothing is sent: follow with send_message, or use ask_agent
+    with new_chat=true to open, send and wait in one call.
+    """
+    if app != 'chatgpt':
+        raise ToolError(f'new_chat is not supported for {app} yet; open a new conversation in the app.')
+    message = await run_cli(app, 'new', *(['--project', project] if project else []))
+    _open_session.pop(app, None)
+    return Result(app=app, message=message)
 
 
 @mcp.tool(annotations=READ)
@@ -390,32 +426,50 @@ async def read_reply(app: App) -> Reply:
 
 
 @mcp.tool(annotations=READ)
-async def wait_for_reply(app: App, timeout_seconds: float = 300, ctx: Context | None = None) -> Waited:
+async def wait_for_reply(app: App, timeout_seconds: float = 300, session: str | None = None,
+                         ctx: Context | None = None) -> Waited:
     """Wait until the open conversation's agent finishes, then return its reply.
 
     Use after send_message or submit_draft. Returns status "done" with the reply, "question"
     when a Cursor agent stops on a multiple-choice question (answer with
     cursor_answer_question), or "timeout" with whatever reply is visible so far.
+    For Claude, the session's sidebar "Running" marker (more reliable than the Stop button)
+    is used too; session defaults to the one last opened with open_session or ask_agent.
     timeout_seconds is capped at 900.
     """
-    return await wait_until_done(app, max(5.0, min(timeout_seconds, 900.0)), 2.0, None, ctx)
+    return await wait_until_done(app, max(5.0, min(timeout_seconds, 900.0)), 2.0, None, ctx,
+                                 session or _open_session.get(app))
 
 
 @mcp.tool(annotations=SUBMIT)
-async def ask_agent(app: App, message: str, session: str | None = None, timeout_seconds: float = 300,
+async def ask_agent(app: App, message: str, session: str | None = None, new_chat: bool = False,
+                    project: str | None = None, timeout_seconds: float = 300,
                     ctx: Context | None = None) -> Waited:
     """Send a message to an agent and wait for its finished reply, in one call.
 
-    Opens session first when given (title as in list_sessions; must be in the current view),
-    otherwise uses the open conversation. Refuses like send_message when a draft exists or a
-    Cursor question is pending. Returns like wait_for_reply; on "timeout" the message was sent,
-    so call wait_for_reply again rather than resending. timeout_seconds is capped at 900.
+    Where it goes: session opens that session first (title as in list_sessions; must be in
+    the current view); new_chat=true starts a new conversation first, inside project if
+    given (ChatGPT/Codex only); otherwise the open conversation. Refuses like send_message when
+    a draft exists or a Cursor question is pending. Returns like wait_for_reply; on "timeout"
+    the message was sent, so call wait_for_reply again rather than resending.
+    timeout_seconds is capped at 900.
     """
-    if session:
+    if session and new_chat:
+        raise ToolError('Pass either session or new_chat, not both.')
+    if project and not new_chat:
+        raise ToolError('project applies only with new_chat=true.')
+    if new_chat:
+        if app != 'chatgpt':
+            raise ToolError(f'new_chat is not supported for {app} yet.')
+        await run_cli(app, 'new', *(['--project', project] if project else []))
+        _open_session.pop(app, None)
+    elif session:
         await run_cli(app, 'session', session)
+        _open_session[app] = session
+    session = session or _open_session.get(app)
     previous = await try_read(app)
     await run_cli(app, 'send', message)
-    result = await wait_until_done(app, max(5.0, min(timeout_seconds, 900.0)), 2.0, previous, ctx)
+    result = await wait_until_done(app, max(5.0, min(timeout_seconds, 900.0)), 2.0, previous, ctx, session)
     result.session = session
     return result
 

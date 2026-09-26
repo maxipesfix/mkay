@@ -265,200 +265,6 @@ return output
 '''
 
 
-READ_SCRIPT = r'''
-tell application "Claude" to activate
-delay 0.3
-
-tell application "System Events"
-    tell process "Claude"
-        set elems to entire contents of (my mainWindow())
-        set elemCount to count elems
-        set startIndex to 0
-
-        -- Find the LAST "Claude responded:" heading.
-        repeat with i from elemCount to 1 by -1
-            set el to item i of elems
-
-            try
-                if (role of el as text) is "AXHeading" then
-                    set n to name of el
-
-                    if n is not missing value then
-                        set n to n as text
-
-                        if n starts with "Claude responded:" then
-                            set startIndex to i
-                            exit repeat
-                        end if
-                    end if
-                end if
-            end try
-        end repeat
-
-        if startIndex is 0 then
-            error "No Claude response found."
-        end if
-
-        set responseContainer to value of attribute "AXParent" of item startIndex of elems
-        set responseElems to entire contents of responseContainer
-        set output to ""
-        set previousText to ""
-        set pastHeading to false
-        repeat with elementRef in responseElems
-            set el to contents of elementRef
-
-            try
-                set r to role of el as text
-
-                if r is "AXToolbar" then exit repeat
-                if r is "AXHeading" then
-                    set h to name of el
-
-                    if h is not missing value then
-                        set h to h as text
-
-                        if h starts with "Claude responded:" then
-                            set pastHeading to true
-                        else if h starts with "You said:" then
-                            exit repeat
-                        end if
-                    end if
-                end if
-
-                if r is "AXStaticText" and pastHeading then
-                    set t to value of el
-
-                    if t is not missing value then
-                        set t to t as text
-
-                        if t is not "" and t is not previousText then
-                            -- Avoid the accessibility duplicate of the heading.
-                            if t does not start with "Claude responded:" then
-                                set output to output & t & linefeed
-                                set previousText to t
-                            end if
-                        end if
-                    end if
-                end if
-            end try
-        end repeat
-
-        if output is "" then
-            -- Fallback: at least return heading text.
-            try
-                return name of item startIndex of elems as text
-            end try
-        end if
-
-        return output
-    end tell
-end tell
-'''
-
-
-PROMPT_HELPERS = GET_ATTR + r'''
-on promptOf(elems)
-    set matches to {}
-    set textAreas to {}
-    repeat with elementRef in elems
-        set el to contents of elementRef
-        if my getAttr(el, "AXRole") is "AXTextArea" then
-            set end of textAreas to contents of el
-            if my getAttr(el, "AXDescription") is "Prompt" then set end of matches to contents of el
-        end if
-    end repeat
-    if (count matches) is 1 then return item 1 of matches
-    -- Older layouts may lack a label. Accept only a unique editor, never the
-    -- first/last of several editors, which may include search or message editing.
-    if (count matches) is 0 and (count textAreas) is 1 then return item 1 of textAreas
-    error "Cannot identify one Claude prompt text area. Close other editors and retry."
-end promptOf
-
-on focusPrompt(target)
-    tell application "System Events"
-        set value of attribute "AXFocused" of target to true
-        if (value of attribute "AXFocused" of target) is not true then error "Could not focus Claude prompt."
-    end tell
-end focusPrompt
-'''
-
-
-INPUT_SCRIPT = PROMPT_HELPERS + r'''
-set inputText to system attribute "CLAUDE_TEXT"
-set shouldSend to system attribute "CLAUDE_SEND"
-
-tell application "Claude" to activate
-delay 0.25
-
-tell application "System Events"
-    tell process "Claude"
-        set frontmost to true
-        set elems to entire contents of (my mainWindow())
-        set target to my promptOf(elems)
-
-        set priorText to (value of target) as text
-        if priorText is not "" and priorText is not linefeed and priorText is not return then error "Prompt already contains a draft; send or clear it first."
-
-        my focusPrompt(target)
-
-        -- Clipboard paste is much more reliable than AppleScript keystroke
-        -- for long text, punctuation, unicode, and multiline prompts.
-        set oldClipboard to missing value
-        try
-            set oldClipboard to the clipboard as record
-        end try
-
-        try
-            set the clipboard to inputText
-            keystroke "v" using command down
-            set pasted to false
-            repeat 20 times
-                delay 0.1
-                set actualText to value of target as text
-                if actualText is inputText or actualText is (inputText & linefeed) then
-                    set pasted to true
-                    exit repeat
-                end if
-            end repeat
-            if not pasted then error "Could not verify text in Claude prompt; nothing submitted."
-            if shouldSend is "1" then key code 36
-            delay 0.2
-        on error errText number errNum
-            if oldClipboard is not missing value then set the clipboard to oldClipboard
-            error errText number errNum
-        end try
-        if oldClipboard is not missing value then set the clipboard to oldClipboard
-
-        if shouldSend is "1" then
-            return "Sent."
-        else
-            return "Typed."
-        end if
-    end tell
-end tell
-'''
-
-
-RETURN_SCRIPT = PROMPT_HELPERS + r'''
-tell application "Claude" to activate
-delay 0.15
-
-tell application "System Events"
-    tell process "Claude"
-        set frontmost to true
-        set elems to entire contents of (my mainWindow())
-        set target to my promptOf(elems)
-        set draft to value of target as text
-        if draft is "" or draft is linefeed or draft is return then error "Prompt is empty; nothing submitted."
-        my focusPrompt(target)
-        key code 36
-    end tell
-end tell
-
-return "Return pressed."
-'''
-
-
 def usage():
     print(
         """Usage (Claude is the default app; see ./agent_ctl.py --help for others):
@@ -523,29 +329,22 @@ def main(args=None):
         except KeyboardInterrupt:
             sys.exit(130)
 
-    elif cmd == "session":
-        if len(argv) < 3:
-            sys.exit('Usage: ./agent_ctl.py session "part of session title"')
-        query = " ".join(argv[2:])
-        print(osa(SESSION_SCRIPT, CLAUDE_SESSION=query))
-
-    elif cmd == "read":
-        print(osa(READ_SCRIPT))
-
-    elif cmd in ("type", "send"):
-        if len(argv) < 3:
+    elif cmd in ("session", "read", "type", "send", "enter", "return"):
+        # Native accessibility (fast); the conversation reader and input live with the sidebar code.
+        if cmd in ("session", "type", "send") and len(argv) < 3:
             sys.exit(f'Usage: ./agent_ctl.py {cmd} "text"')
-        message = " ".join(argv[2:])
-        print(
-            osa(
-                INPUT_SCRIPT,
-                CLAUDE_TEXT=message,
-                CLAUDE_SEND="1" if cmd == "send" else "0",
-            )
-        )
-
-    elif cmd in ("enter", "return"):
-        print(osa(RETURN_SCRIPT))
+        command, env = helper('claude_sidebar', *argv[1:])
+        try:
+            code = subprocess.run(command, env=env, timeout=45).returncode
+        except subprocess.TimeoutExpired:
+            sys.exit(f'Claude {cmd} stopped after 45 seconds. Check Claude before retrying; nothing was retried.')
+        except KeyboardInterrupt:
+            sys.exit(130)
+        if code == 3 and cmd == "session":
+            # Not a sidebar row (e.g. a link on a Claude project page): search the whole window.
+            print(osa(SESSION_SCRIPT, CLAUDE_SESSION=" ".join(argv[2:])))
+            return 0
+        return code
 
     else:
         usage()
