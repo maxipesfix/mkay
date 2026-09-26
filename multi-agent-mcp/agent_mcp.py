@@ -180,6 +180,7 @@ class Reply(BaseModel):
     app: str
     reply: str
     pending_question: Question | None = None
+    agent_error: str | None = None  # Cursor: an error card shown instead of a reply
 
 
 class Answer(BaseModel):
@@ -199,19 +200,35 @@ class AppStatus(BaseModel):
     pending_question: bool | None = None  # Cursor only
     running: list[str] = []  # Claude only: sidebar sessions still working
     unread: list[str] = []  # Claude only: sidebar sessions with an unread reply
-    error: str | None = None
+    agent_error: str | None = None  # Cursor only: an error card, e.g. "Invalid API key."
+    error: str | None = None  # This app could not be read
 
 
 class Waited(BaseModel):
     app: str
-    status: Literal['done', 'question', 'timeout']
+    status: Literal['done', 'question', 'error', 'timeout']
     reply: str
     pending_question: Question | None = None
+    agent_error: str | None = None
     waited_seconds: float
     session: str | None = None
 
 
 PENDING = 'Pending question: '
+
+
+AGENT_ERROR = 'Agent error: '
+
+
+def split_error(text: str) -> tuple[str, str | None]:
+    """Split the CLI's `Agent error:` line (Cursor's error card) from the reply text."""
+    kept, error = [], None
+    for line in text.splitlines():
+        if line.startswith(AGENT_ERROR):
+            error = line[len(AGENT_ERROR):]
+        else:
+            kept.append(line)
+    return '\n'.join(kept), error
 
 
 def split_question(text: str) -> tuple[str, Question | None]:
@@ -239,6 +256,8 @@ def parse_status(app: str, text: str) -> AppStatus:
             result.busy = {'yes': True, 'no': False}.get(value)
         elif key == 'question':
             result.pending_question = value == 'yes'
+        elif key == 'agent_error':
+            result.agent_error = value
         elif key in ('running', 'unread'):
             getattr(result, key).append(value)
     return result
@@ -276,7 +295,8 @@ def still_running(state: AppStatus, session: str | None) -> bool:
 
 
 async def wait_until_done(app: str, timeout: float, poll: float, previous: str | None,
-                          ctx: Context | None, session: str | None = None) -> Waited:
+                          ctx: Context | None, session: str | None = None,
+                          previous_error: str | None = None) -> Waited:
     """Poll status and read until the agent is idle and its reply stops changing.
 
     Done means: not busy, and the same reply text on two consecutive idle checks. With
@@ -291,6 +311,11 @@ async def wait_until_done(app: str, timeout: float, poll: float, previous: str |
     while True:
         elapsed = loop.time() - start
         state = parse_status(app, await run_cli(app, 'status'))
+        if state.agent_error and state.agent_error != previous_error:
+            # The agent answered with an error card (e.g. an invalid API key): no reply will come.
+            reply, _ = split_question(split_error(await try_read(app) or '')[0])
+            return Waited(app=app, status='error', reply=reply, agent_error=state.agent_error,
+                          waited_seconds=round(elapsed, 1))
         if state.busy is not True and still_running(state, session):
             state.busy = True
         if not state.busy or state.pending_question:
@@ -421,8 +446,9 @@ async def read_reply(app: App) -> Reply:
     May be partial while the reply streams. For Cursor, includes everything after the latest
     user message (tool summaries too) and any pending multiple-choice question.
     """
-    reply, question = split_question(await run_cli(app, 'read'))
-    return Reply(app=app, reply=reply, pending_question=question)
+    text, error = split_error(await run_cli(app, 'read'))
+    reply, question = split_question(text)
+    return Reply(app=app, reply=reply, pending_question=question, agent_error=error)
 
 
 @mcp.tool(annotations=READ)
@@ -432,7 +458,8 @@ async def wait_for_reply(app: App, timeout_seconds: float = 300, session: str | 
 
     Use after send_message or submit_draft. Returns status "done" with the reply, "question"
     when a Cursor agent stops on a multiple-choice question (answer with
-    cursor_answer_question), or "timeout" with whatever reply is visible so far.
+    cursor_answer_question), "error" when Cursor shows an error card instead of replying
+    (agent_error holds its text), or "timeout" with whatever reply is visible so far.
     For Claude, the session's sidebar "Running" marker (more reliable than the Stop button)
     is used too; session defaults to the one last opened with open_session or ask_agent.
     timeout_seconds is capped at 900.
@@ -468,8 +495,11 @@ async def ask_agent(app: App, message: str, session: str | None = None, new_chat
         _open_session[app] = session
     session = session or _open_session.get(app)
     previous = await try_read(app)
+    # An error card already showing is not the answer to this message; each has its own request ID.
+    previous_error = split_error(previous or '')[1]
     await run_cli(app, 'send', message)
-    result = await wait_until_done(app, max(5.0, min(timeout_seconds, 900.0)), 2.0, previous, ctx, session)
+    result = await wait_until_done(app, max(5.0, min(timeout_seconds, 900.0)), 2.0, previous, ctx, session,
+                                   previous_error)
     result.session = session
     return result
 

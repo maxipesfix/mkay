@@ -180,6 +180,7 @@ unread: Background noise interruptions in Nexor-Pipecat
 | `mode` | All | Current view, as printed by `mode` |
 | `busy` | All | `yes` while the open conversation's agent is working, detected by the stop control that replaces Send; Cursor prints `unknown` when its main window has no agent composer |
 | `question` | Cursor | `yes` while a multiple-choice question is pending |
+| `agent_error` | Cursor | The text of an error card shown above the composer instead of a reply (for example `Invalid API key. Unauthorized User API key Request ID: …`) |
 | `running` | Claude | One line per sidebar session still working |
 | `unread` | Claude | One line per sidebar session with an unread reply |
 
@@ -327,6 +328,18 @@ scrolled out of view, `read` returns every rendered row, which can include older
 turns. If several agent chats are visible in one IDE window, commands refuse to
 guess; close or focus one.
 
+The composer's text is read from its rendered paragraphs, not from the editor's
+`AXValue`, which can keep showing old text for seconds after the editor is cleared or
+new text is pasted. That stale value made the first `send` attempts fail their
+verification even though the text had been pasted.
+
+### Error cards
+
+When a request fails, for example with an invalid API key, Cursor shows an error card
+above the composer (with **Dismiss error**) instead of adding a reply to the
+conversation. `status` reports it as `agent_error: …`, and `read` ends with an
+`Agent error: …` line. The card stays until it is dismissed in Cursor.
+
 ### Multiple-choice questions
 
 When a Cursor agent is waiting on a multiple-choice question, `read` ends with the
@@ -364,7 +377,8 @@ is retried automatically.
 | `mode`, `projects`, `project`, `sessions`, `session`, `read` in both views | Tested live |
 | `enter` refusing an empty prompt or a pending question | Tested live |
 | `answer` with a normal option in the Agents view | Tested live |
-| `type` / `send` | Not yet retested live after the paste-verification fix |
+| `type`, and `send` refusing a draft | Tested live (Agents view) |
+| `send` submitting | Not yet confirmed live |
 | `answer` with a free-text option, in the IDE view, or with several questions | Not tested live |
 
 ## Diagnostics

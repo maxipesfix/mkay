@@ -237,17 +237,35 @@ class Cursor(Walker):
         return self.unique(editors, 'agent composer (close other visible agent chats)')
 
     @staticmethod
-    def is_empty(editor):
-        # An empty editor reports its placeholder as AXValue; its paragraph is
-        # then marked is-editor-empty.
-        value = editor.get('AXValue') or ''
-        if not value.strip():
-            return True
-        return any('is-editor-empty' in classes(child) for child in editor.get('AXChildren') or [])
-
-    @staticmethod
     def draft(editor):
-        return (editor.get('AXValue') or '').rstrip('\n')
+        """The composer's text, read from its rendered paragraphs.
+
+        The editor's own AXValue is unreliable: it can keep showing old text after the
+        editor is cleared or new text is pasted (observed for seconds on end), and an
+        empty editor reports its placeholder there. The paragraphs are current, and an
+        empty one is marked is-editor-empty.
+        """
+        lines = []
+
+        def collect(node, parts, depth):
+            if node.get('AXRole') == 'AXStaticText':
+                value = node.get('AXValue')
+                if isinstance(value, str):
+                    parts.append(value)
+            elif depth < 6:
+                for child in node.get('AXChildren') or []:
+                    collect(child, parts, depth + 1)
+        for paragraph in editor.get('AXChildren') or []:
+            if 'is-editor-empty' in classes(paragraph):
+                continue
+            parts: list[str] = []
+            collect(paragraph, parts, 0)
+            lines.append(''.join(parts))
+        return '\n'.join(lines).strip('\n')
+
+    @classmethod
+    def is_empty(cls, editor):
+        return not cls.draft(editor).strip()
 
     def transcript_rows(self, window):
         containers = [n for n, role, _ in self.walk(window, self.LIMIT)
@@ -415,12 +433,34 @@ class Cursor(Walker):
         raise SidebarError(f'Chose option {letter}, but the question did not change. '
                            'Check Cursor before retrying; the answer may already be recorded.')
 
+    def error_card(self, window):
+        """Text of an error card shown above the composer (e.g. "Invalid API key."), or None.
+
+        Cursor shows request failures in a tray above the prompt input, with a
+        "Dismiss error" button, instead of adding them to the conversation."""
+        for tray, role, _ in self.walk(window, self.LIMIT):
+            if role != 'AXGroup' or 'ui-prompt-input-header-tray' not in classes(tray):
+                continue
+            texts, is_error = [], False
+            for node, kind, ancestors in self.walk(tray, 400):
+                text = clean(label(node))
+                if kind == 'AXButton':
+                    is_error = is_error or ('dismiss' in text.lower() and 'error' in text.lower())
+                elif kind == 'AXStaticText' and text and not any(a.get('AXRole') == 'AXButton' for a in ancestors):
+                    texts.append(text)
+            if is_error and texts:
+                return ' '.join(texts)
+        return None
+
     def latest_reply(self):
         window = self.main_window()
         rows = self.transcript_rows(window)
         humans = [i for i, (_, human) in enumerate(rows) if human]
         start = humans[-1] + 1 if humans else 0
         parts = [self.text(node) for node, _ in rows[start:]]
+        error = self.error_card(window)
+        if error:
+            parts.append('Agent error: ' + error)
         question = self.question(window)
         if question:
             parts.append('\n'.join(question))
@@ -448,8 +488,12 @@ class Cursor(Walker):
         window = self.main_window()
         busy = self.busy(window)
         question = self.question_state(window) is not None
-        return '\n'.join([f'mode: {mode}', 'busy: ' + {True: 'yes', False: 'no', None: 'unknown'}[busy],
-                          'question: ' + ('yes' if question else 'no')])
+        lines = [f'mode: {mode}', 'busy: ' + {True: 'yes', False: 'no', None: 'unknown'}[busy],
+                 'question: ' + ('yes' if question else 'no')]
+        error = self.error_card(window)
+        if error:
+            lines.append('agent_error: ' + error)
+        return '\n'.join(lines)
 
     # Commands
 

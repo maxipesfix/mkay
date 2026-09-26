@@ -73,6 +73,9 @@ Submitting tools (send_message, submit_draft, ask_agent, cursor_answer_question)
 with the user by the client before they run, reading the exact text back. If the user declines,
 acknowledge and do not retry unless asked.
 
+If a result has status "error" or an agent_error (for example Cursor's "Invalid API key"), the
+agent did not answer: tell the user the error briefly and do not wait for a reply.
+
 If a reply looks like the agent has only started (for example "I'll check that now" or a
 single status line such as "Ran 2 commands"), call wait_for_reply again before summarizing.
 Summarize the whole reply, not just its first sentence.

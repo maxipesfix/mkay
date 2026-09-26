@@ -71,8 +71,10 @@ async def exercise(client, app):
             check('Nothing to wait for' in waited.content[0].text,
                   f'wait_for_reply({app}) without a conversation reports it: {waited.content[0].text[:100]}')
         else:
-            check(result.get('status') == 'done',
-                  f"wait_for_reply({app}) on an idle chat: {result.get('status')} after {result.get('waited_seconds')}s")
+            # 'error' is also a finished state: Cursor may be showing an error card (agent_error).
+            finished = result.get('status') == 'done' or (result.get('status') == 'error' and result.get('agent_error'))
+            check(finished, f"wait_for_reply({app}) on an idle chat: {result.get('status')} after "
+                            f"{result.get('waited_seconds')}s" + (f" ({result['agent_error'][:40]})" if result.get('agent_error') else ''))
     else:
         print(f'SKIP: wait_for_reply({app}) needs an idle chat without a pending question', flush=True)
     reply = await client.call_tool('read_reply', {'app': app})

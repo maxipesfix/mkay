@@ -59,6 +59,7 @@ message and exit status, which the calling model can read.
 | --- | --- |
 | `done` | The agent is idle and its reply text was the same on two consecutive checks; `reply` holds it |
 | `question` | A Cursor agent stopped on a multiple-choice question; `pending_question` holds it |
+| `error` | Cursor showed an error card instead of replying (for example "Invalid API key."); `agent_error` holds its text |
 | `timeout` | `timeout_seconds` passed (default 300, at most 900); `reply` holds whatever is visible |
 
 If the agent is idle and no reply can be read on consecutive checks, for example
@@ -67,7 +68,9 @@ the CLI's reason instead of waiting out the timeout. It waits at least 8 seconds
 first, so a message just sent to a new chat has time to show as busy.
 
 `ask_agent` records the reply before sending and only accepts a different one, so an
-old reply is never returned as the answer. For Claude, when the session is known
+old reply is never returned as the answer. It also notes any Cursor error card already
+showing, so only a new error ends the wait. `read_reply` and `status` report a showing
+error card as `agent_error`. For Claude, when the session is known
 (`ask_agent`'s or `wait_for_reply`'s `session`, or else the session last opened in that
 app through `open_session`, `ask_agent` or `new_chat`, which the server remembers until
 the view changes), the wait also continues
