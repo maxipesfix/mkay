@@ -7,8 +7,8 @@ transcribed on the Mac, an LLM (OpenAI by default, or Claude) decides which
 macOS `say`.
 
 This is the simple, turn-by-turn prototype: one request at a time, no continuous
-listening. A Pipecat-based client with turn detection and barge-in is planned
-separately as `local-voice-pipecat`.
+listening. [`../local-voice-pipecat`](../local-voice-pipecat/README.md) is the
+hands-free client, with turn detection and barge-in, used from a browser.
 
 ```text
 hold key → microphone → Whisper (local) → OpenAI or Claude API → agent_mcp.py tools → apps
