@@ -623,11 +623,21 @@ def latest_reply(reader):
     if start is None:
         raise SidebarError('Cannot identify an assistant reply. Run --app chatgpt debug-read.')
     heading = label(rows[start][0])
+    # The composer is the window's last text area. Any other text area inside the reply is a
+    # document card ("Writing", with an "Open editor" button) that holds its text as AXValue.
+    composer = next((row[0] for row in reversed(rows) if row[1] == 'AXTextArea'), None)
     lines = []
     for index in range(start + 1, len(rows)):
         node, role, _ = rows[index]
-        if role in ('AXTextArea', 'AXToolbar'):
-            break  # The composer or the reply's action bar.
+        if role == 'AXToolbar':
+            break  # The reply's action bar.
+        if role == 'AXTextArea':
+            if node == composer or COMPOSER_LABEL.fullmatch((node.get('AXDescription') or '').strip()):
+                break
+            value = node.get('AXValue')
+            if isinstance(value, str) and value.strip():
+                lines.append(value.strip())
+            continue
         text = label(node)
         # Rate/fork end the message; Copy also appears inside code blocks, so it does not.
         if role == 'AXButton' and text in ('Rate response', 'Fork chat from here'):

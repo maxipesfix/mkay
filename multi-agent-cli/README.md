@@ -249,7 +249,9 @@ Claude's `session` also opens sidebar rows natively and falls back to a whole-wi
 search only for titles that are not in the sidebar, such as links on a project page.
 Before pasting, the input is focused and the focus confirmed, retrying for up to two
 seconds while the app comes forward or a newly opened conversation renders. `read` may return partial text while the reply is streaming,
-and its line breaks reflect accessibility text fragments.
+and its line breaks reflect accessibility text fragments. A ChatGPT reply that is a
+document card ("Writing", with an Open editor button) keeps its text in an editor inside
+the reply; `read` returns the card's label followed by the whole document.
 
 If submission times out or cannot be confirmed, inspect the app before retrying
 to avoid sending the message twice.
