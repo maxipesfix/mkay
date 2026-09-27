@@ -174,9 +174,13 @@ These were learned by breaking them; keep them unless you have evidence otherwis
 - MCP tool descriptions keep docstring indentation; clean them up.
 
 **Next steps (roadmap)**
-- `local-voice-pipecat` from a phone: `tailscale serve` for HTTPS inside the tailnet,
-  `--allowed-host` for its name, accept only the owner's `Tailscale-User-Login`, keep
-  the session across screen locking, a mobile-friendly page (see its README's "Next").
+- `connector.py --pair URL`: device-code pairing (a short one-time code confirmed on the
+  server's signed-in web page; the token is delivered to the connector and saved with
+  mode 600), instead of copying a token by hand.
+- `run_bot` taking any Pipecat transport (not only SmallWebRTC), so servers can use
+  other transports such as Daily.
+- `local-voice-pipecat` from a phone on your own network: `tailscale serve` for HTTPS,
+  `--allowed-host` for its name, and a mobile-friendly page.
 - Pipecat client: limit conversation history (it grows for the whole session) and an
   offline eval (`pipecat eval`, text mode) with the MCP tools stubbed.
 - Pipecat client: find why Kokoro logs "completed with no audio" after listings with
