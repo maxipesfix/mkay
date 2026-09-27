@@ -492,8 +492,32 @@ def make_llm(provider: str, prompt: str):
             model=model, system_instruction=prompt, extra={'output_config': {'effort': effort}}))
 
 
-async def run_bot(connection, agent_tools: AgentTools, provider: str) -> None:
-    """One voice session for one browser connection."""
+def smallwebrtc_transport(connection):
+    """A Pipecat transport for one browser's WebRTC connection, logging its state changes."""
+    from pipecat.transports.base_transport import TransportParams
+    from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
+
+    for state in ('disconnected', 'failed', 'closed'):
+        @connection.event_handler(state)
+        async def on_state(connection, state=state):
+            log(f'WebRTC connection {state}.')
+
+    @connection.event_handler('track-ended')
+    async def on_track_ended(connection, track):
+        if track.kind == 'audio':  # The page also opens camera and screen tracks; only audio matters.
+            log('The browser ended its microphone track.')
+
+    return SmallWebRTCTransport(
+        webrtc_connection=connection, params=TransportParams(audio_in_enabled=True, audio_out_enabled=True))
+
+
+async def run_bot(transport, agent_tools: AgentTools, provider: str) -> None:
+    """One voice session over a Pipecat transport with audio in and out.
+
+    Locally that is a browser's WebRTC connection (smallwebrtc_transport); a server can pass
+    any other transport, such as a Daily room. The session ends when the client disconnects
+    (the transport's on_client_disconnected event) or agent_tools.runner is cancelled.
+    """
     from pipecat.audio.vad.silero import SileroVADAnalyzer
     from pipecat.frames.frames import TTSSpeakFrame
     from pipecat.pipeline.pipeline import Pipeline
@@ -501,13 +525,9 @@ async def run_bot(connection, agent_tools: AgentTools, provider: str) -> None:
     from pipecat.processors.aggregators.llm_context import LLMContext
     from pipecat.processors.aggregators.llm_response_universal import (LLMContextAggregatorPair,
                                                                        LLMUserAggregatorParams)
-    from pipecat.transports.base_transport import TransportParams
-    from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
     from pipecat.turns.user_mute.function_call_user_mute_strategy import FunctionCallUserMuteStrategy
     from pipecat.workers.runner import WorkerRunner
 
-    transport = SmallWebRTCTransport(
-        webrtc_connection=connection, params=TransportParams(audio_in_enabled=True, audio_out_enabled=True))
     stt_kind, tts_kind = speech_services()
     stt = make_stt(stt_kind, agent_tools.names)
     tts = make_tts(tts_kind)
@@ -549,16 +569,6 @@ async def run_bot(connection, agent_tools: AgentTools, provider: str) -> None:
         log('Browser disconnected.')
         await runner.cancel()
 
-    for state in ('disconnected', 'failed', 'closed'):
-        @connection.event_handler(state)
-        async def on_state(connection, state=state):
-            log(f'WebRTC connection {state}.')
-
-    @connection.event_handler('track-ended')
-    async def on_track_ended(connection, track):
-        if track.kind == 'audio':  # The page also opens camera and screen tracks; only audio matters.
-            log('The browser ended its microphone track.')
-
     watcher = asyncio.create_task(watch.watch())
     try:
         await runner.run()
@@ -568,6 +578,27 @@ async def run_bot(connection, agent_tools: AgentTools, provider: str) -> None:
 
 
 LOCAL_USER = 'local'
+
+
+def check_host_and_origin(app, allowed_hosts: set[str]) -> None:
+    """Refuse HTTP requests whose Host, or Origin if sent, is not one of allowed_hosts.
+
+    This blocks DNS rebinding (a foreign Host) and other web pages driving the server (a
+    foreign Origin): anyone who can start a session can talk to the apps.
+    """
+    from fastapi import Request
+    from fastapi.responses import PlainTextResponse
+
+    allowed_origins = {f'{scheme}://{host}' for host in allowed_hosts for scheme in ('http', 'https')}
+
+    @app.middleware('http')
+    async def host_and_origin(request: Request, call_next):
+        if request.headers.get('host', '') not in allowed_hosts:
+            return PlainTextResponse('Host not allowed', status_code=421)
+        origin = request.headers.get('origin')
+        if origin is not None and origin not in allowed_origins:
+            return PlainTextResponse('Origin not allowed', status_code=403)
+        return await call_next(request)
 
 
 def create_app(provider: str, allowed_hosts: set[str], open_tools, *, authorize=None, lifespan=None):
@@ -583,13 +614,12 @@ def create_app(provider: str, allowed_hosts: set[str], open_tools, *, authorize=
         lifespan: Optional async context manager factory run for the app's lifetime.
     """
     from fastapi import FastAPI, HTTPException, Request
-    from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
+    from fastapi.responses import JSONResponse, RedirectResponse
     from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
     from pipecat.transports.smallwebrtc.request_handler import (IceCandidate, SmallWebRTCPatchRequest,
                                                                 SmallWebRTCRequest, SmallWebRTCRequestHandler)
     from pipecat_ai_prebuilt.frontend import PipecatPrebuiltUI
 
-    allowed_origins = {f'{scheme}://{host}' for host in allowed_hosts for scheme in ('http', 'https')}
     handler = SmallWebRTCRequestHandler()
     # user -> (session task, AgentTools of that session); session id -> user.
     state: dict = {'bots': {}, 'sessions': {}}
@@ -604,17 +634,7 @@ def create_app(provider: str, allowed_hosts: set[str], open_tools, *, authorize=
             await handler.close()
 
     app = FastAPI(lifespan=app_lifespan, docs_url=None, redoc_url=None, openapi_url=None)
-
-    @app.middleware('http')
-    async def check_host_and_origin(request: Request, call_next):
-        # Block DNS rebinding (foreign Host) and other web pages driving this server (foreign
-        # Origin): anyone who can start a session can talk to the apps.
-        if request.headers.get('host', '') not in allowed_hosts:
-            return PlainTextResponse('Host not allowed', status_code=421)
-        origin = request.headers.get('origin')
-        if origin is not None and origin not in allowed_origins:
-            return PlainTextResponse('Origin not allowed', status_code=403)
-        return await call_next(request)
+    check_host_and_origin(app, allowed_hosts)
 
     app.mount('/client', PipecatPrebuiltUI)
 
@@ -649,7 +669,7 @@ def create_app(provider: str, allowed_hosts: set[str], open_tools, *, authorize=
             async with open_tools(user) as agent_tools:
                 agent_tools.reset()
                 state['bots'][user] = (me, agent_tools)
-                await run_bot(connection, agent_tools, provider)
+                await run_bot(smallwebrtc_transport(connection), agent_tools, provider)
         except Exception as error:
             log(f'Session failed: {error!r}')
         finally:

@@ -138,7 +138,8 @@ These were learned by breaking them; keep them unless you have evidence otherwis
   checks, one session at a time (a new connection replaces the old one).
 - Importable: `create_app` takes `open_tools(user)` and `authorize(request)` hooks,
   so a server can give each user's session its own MCP connection (the local entry
-  point serves one local user, as before).
+  point serves one local user, as before). `run_bot(transport, ...)` takes any Pipecat
+  transport (a server uses Daily rooms); `check_host_and_origin` is reusable.
 - Cloud speech: Deepgram (keyterms from learned names, model-improvement opt-out) and
   Fish Audio when their keys are set, else local Whisper and Kokoro (`VOICE_STT`,
   `VOICE_TTS`); a cloud-speech session uses ~160 MB and ~10% of a core when idle.
@@ -181,8 +182,6 @@ These were learned by breaking them; keep them unless you have evidence otherwis
 - MCP tool descriptions keep docstring indentation; clean them up.
 
 **Next steps (roadmap)**
-- `run_bot` taking any Pipecat transport (not only SmallWebRTC), so servers can use
-  other transports such as Daily.
 - `local-voice-pipecat` from a phone on your own network: `tailscale serve` for HTTPS,
   `--allowed-host` for its name, and a mobile-friendly page.
 - Pipecat client: limit conversation history (it grows for the whole session) and an

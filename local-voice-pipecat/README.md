@@ -136,6 +136,12 @@ server serves a single local user), and `open_tools(user)` supplies that session
 [`../multi-agent-mcp/connector.py`](../multi-agent-mcp/README.md#remote-voice-servers-connector).
 `Names(path=None)` keeps learned names in memory instead of the shared file.
 
+A server with its own signaling can use the pieces directly: `run_bot(transport,
+agent_tools, provider)` runs one session over any Pipecat transport with audio in and
+out (such as a Daily room; `smallwebrtc_transport(connection)` is the local one), and
+`check_host_and_origin(app, allowed_hosts)` adds the Host and Origin checks to a FastAPI
+app.
+
 ## Troubleshooting
 
 - **"Microphone blocked" on the page:** allow the microphone for `localhost` in the
