@@ -342,6 +342,16 @@ def log(message: str) -> None:
     print(f'[{time.strftime("%H:%M:%S")}] {message}', flush=True)
 
 
+# VOICE_LOG_CONTENT=0 keeps conversation content out of the log (what was said, tool
+# arguments and results): a server logs only their length.
+LOG_CONTENT = os.environ.get('VOICE_LOG_CONTENT', '1') != '0'
+
+
+def said(text: str) -> str:
+    """Conversation content for the log, or only its length when LOG_CONTENT is off."""
+    return text if LOG_CONTENT else f'[{len(text)} characters]'
+
+
 class AgentTools:
     """The MCP server's tools as Pipecat functions, with confirmation before submitting.
 
@@ -379,7 +389,7 @@ class AgentTools:
 
     async def speak(self, params, text: str) -> None:
         from pipecat.frames.frames import TTSSpeakFrame
-        log(f'🔊 {text}')
+        log(f'🔊 {said(text)}')
         await params.llm.push_frame(TTSSpeakFrame(text, append_to_context=False))
 
     @staticmethod
@@ -424,7 +434,7 @@ class AgentTools:
         pending = self.pending
         if pending and pending['name'] == name and pending['args'] == args:
             answer = self.user_words_since(params.context, pending['index'])
-            log(f'confirmation answer: {answer!r}')
+            log(f'confirmation answer: {said(repr(answer))}')
             if answer and NO.search(answer):
                 self.pending = None
                 return 'declined'
@@ -469,7 +479,7 @@ class AgentTools:
         return None
 
     async def run(self, params, name: str, args: dict) -> str:
-        log(f'🛠  {name} {json.dumps(args, ensure_ascii=False)}')
+        log(f'🛠  {name} {said(json.dumps(args, ensure_ascii=False))}')
         started = last_update = time.time()
 
         async def on_progress(progress, total, message):
@@ -485,7 +495,7 @@ class AgentTools:
             return f'ERROR: the tool call failed: {error}'
         text = '\n'.join(getattr(block, 'text', '') for block in result.content) or '(no output)'
         log(f'   {name} took {time.time() - started:.1f}s' + (' (error)' if result.is_error else '') +
-            f': {text[:160]!r}')
+            f': {said(repr(text[:160]))}')
         if result.is_error:
             return 'ERROR: ' + text
         if self.names.learn(text) and self.worker:
@@ -634,12 +644,12 @@ async def run_bot(transport, agent_tools: AgentTools, provider: str) -> None:
 
     @user_aggregator.event_handler('on_user_turn_message_added')
     async def on_user_turn(aggregator, message):
-        log(f'🗣  {message.content}')
+        log(f'🗣  {said(message.content)}')
 
     @assistant_aggregator.event_handler('on_assistant_turn_stopped')
     async def on_assistant_turn(aggregator, message):
         if getattr(message, 'content', None):
-            log(f'🔊 {message.content}')
+            log(f'🔊 {said(message.content)}')
 
     @worker.rtvi.event_handler('on_client_ready')
     async def on_client_ready(rtvi):

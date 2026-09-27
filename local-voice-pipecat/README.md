@@ -186,6 +186,7 @@ Set in `.env` (see `.env.example`):
 | `VOICE_KOKORO_VOICE`, `VOICE_KOKORO_SPEED` | `af_heart`, 1.0 | Kokoro voice and speed |
 | `VOICE_PORT` | `7860` | Port for the page and WebRTC signaling (`--port`) |
 | `VOICE_DEBUG` | off | `1` shows Pipecat's debug log |
+| `VOICE_LOG_CONTENT` | on | `0` logs only the length of what was said, tool arguments and results, not their text |
 | `AGENT_MCP` | `../multi-agent-mcp/agent_mcp.py` | MCP server to start |
 
 Speech recognition is primed with the app names, `VOICE_VOCABULARY`, and project and
