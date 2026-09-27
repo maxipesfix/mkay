@@ -22,6 +22,8 @@ multi-agent-mcp/
   README.md
   agent_mcp.py                  # MCP server (stdio and HTTP)
   agent_mcp.py.lock             # Pinned dependencies (uv)
+  connector.py                  # Outbound link from this Mac to a remote voice server
+  connector.py.lock             # Pinned dependencies (uv)
   test/
     test_mcp_server.py          # Live smoke test (read-only tools, refusals, HTTP auth)
 ```
@@ -159,6 +161,38 @@ Anyone who can reach that address and has the token can read your conversations 
 send messages as you, so never bind a public interface. The server has no TLS and no
 OAuth, so web connectors such as claude.ai's, which need a public HTTPS URL, are not
 supported.
+
+## Remote voice servers (connector)
+
+`connector.py` links this Mac to a voice server running elsewhere, such as in the
+cloud, without opening anything on the Mac. It makes an **outbound** WebSocket
+connection to the server, authenticates with a device token, starts `agent_mcp.py`
+over stdio, and passes MCP messages (JSON-RPC, one per WebSocket message) between the
+two. The server can then use every tool listed above, exactly as a local client would.
+
+```bash
+echo 'DEVICE-TOKEN' > ~/.config/agent-mcp/connector-token && chmod 600 ~/.config/agent-mcp/connector-token
+./connector.py --url wss://voice.example.com/connector
+./connector.py --url wss://voice.example.com/connector --read-only
+```
+
+- Each connection gets a fresh MCP server. When the server ends a session (close code
+  4000) the connector reconnects at once; after other disconnects it retries after 1, 2,
+  5, 10 and then every 30 seconds. A refused token (HTTP 401/403 or close code 4001)
+  stops it, since retrying cannot help.
+- It requires `wss://`; plain `ws://` is accepted only to this Mac, for testing.
+- `--read-only` refuses, here on the Mac, every tool the MCP server marks as submitting
+  (`send_message`, `submit_draft`, `ask_agent`, `cursor_answer_question`), whatever the
+  server asks. The refusal is an ordinary tool error ("Nothing was sent"), so the
+  server's model can say so. Calls made before the tool list is known are refused too.
+- Every tool call is printed with its arguments, so you can see what the server does
+  on your Mac. Ctrl-C disconnects.
+- The process that runs it needs Accessibility access, like any other client of the
+  MCP server. The token comes from `AGENT_CONNECTOR_TOKEN` or `--token-file`
+  (default `~/.config/agent-mcp/connector-token`).
+
+The server side is not part of this repository. It accepts the connector's WebSocket,
+checks the token, and speaks MCP over it as a client.
 
 ## MCP smoke test
 

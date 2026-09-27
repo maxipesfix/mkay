@@ -107,6 +107,10 @@ These were learned by breaking them; keep them unless you have evidence otherwis
   session to use Claude's "Running" marker and report progress during long waits.
 - stdio for local clients; HTTP bound to 127.0.0.1 with a bearer token and Host/Origin
   checks; smoke test covering tools, refusals and HTTP auth.
+- `connector.py`: outbound WebSocket link from this Mac to a remote voice server (device
+  token, wss only, fresh MCP server per connection, backoff, `--read-only` refusing
+  submitting tools on the Mac). Checked 2026-09-26 against a stand-in server: tool
+  listing, a read-only call, a refused send, a wrong token, and ws:// to a remote host.
 
 **Voice client** (`local-voice-ptt`)
 - Push-to-talk (right Command by default; works with JIS keyboards and remapped keys),
@@ -125,6 +129,9 @@ These were learned by breaking them; keep them unless you have evidence otherwis
   Whisper and shared with the push-to-talk client); user muted during tool calls.
 - Code-enforced spoken confirmation; own FastAPI server on 127.0.0.1 with Host/Origin
   checks, one session at a time (a new connection replaces the old one).
+- Importable: `create_app` takes `open_tools(user)` and `authorize(request)` hooks,
+  so a server can give each user's session its own MCP connection (the local entry
+  point serves one local user, as before).
 - Cloud speech: Deepgram (keyterms from learned names, model-improvement opt-out) and
   Fish Audio when their keys are set, else local Whisper and Kokoro (`VOICE_STT`,
   `VOICE_TTS`); a cloud-speech session uses ~160 MB and ~10% of a core when idle.
