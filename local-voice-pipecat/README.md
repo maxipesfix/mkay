@@ -12,14 +12,14 @@ on [Pipecat](https://github.com/pipecat-ai/pipecat) 1.12.
 browser (mic, speaker, echo cancellation)
    ⇅ WebRTC audio
 voice_pipecat.py on this Mac:
-   Silero VAD + Smart Turn → Deepgram or Whisper → OpenAI or Claude API → Fish or Kokoro → browser
+   Silero VAD + Smart Turn → Deepgram or Whisper → OpenAI or Claude API → Cartesia, Fish or Kokoro → browser
                                                     ⇅ tool calls
                                          agent_mcp.py (stdio) → apps
 ```
 
 The browser is the microphone and speaker even on this Mac: its echo cancellation
 keeps the bot from hearing its own voice, which a plain microphone stream would not.
-Speech recognition and speech synthesis use cloud APIs (Deepgram, Fish Audio) when
+Speech recognition and speech synthesis use cloud APIs (Deepgram; Cartesia or Fish Audio) when
 their keys are set, and local models (Whisper, Kokoro) otherwise. The cloud services
 make a session light: no models to load, about 160 MB of memory and 10% of one core for a
 connected session, where the local models need about 1.5–2 cores while working.
@@ -177,7 +177,8 @@ Set in `.env` (see `.env.example`):
 | `VOICE_EFFORT` | `low` | Reasoning effort |
 | `DEEPGRAM_API_KEY`, `FISH_API_KEY` | — | Keys for cloud speech |
 | `VOICE_STT` | `deepgram` if its key is set, else `whisper` | Speech-to-text service |
-| `VOICE_TTS` | `fish` if its key is set, else `kokoro` | Text-to-speech service |
+| `VOICE_TTS` | `cartesia` if its key is set, else `fish` if its key is set, else `kokoro` | Text-to-speech service |
+| `VOICE_CARTESIA_VOICE`, `VOICE_CARTESIA_MODEL` | `daniel`, `sonic-3.6` | Cartesia voice (`daniel`, `skylar`, `jacqueline`, `gemma`, `archie`, or a voice ID) and model |
 | `VOICE_STT_MODEL` | `nova-3-general` (Deepgram), `small.en` (Whisper) | Speech-to-text model |
 | `VOICE_STT_LANGUAGE` | `en` | Deepgram language: a code such as `ja`, or `multi` |
 | `VOICE_FISH_VOICE`, `VOICE_FISH_MODEL` | "Sarah" (`933563129e564b19a115bedd57b7406a`), `s2.1-pro` | Fish Audio voice (model ID from fish.audio) and model |
@@ -214,7 +215,7 @@ learned names in `~/.cache/local-voice-ptt/names.json`, so `../local-voice-ptt/v
 | Pipeline, transport, web client | `pipecat-ai`, `pipecat-ai-prebuilt`, `aiortc` | BSD-2-Clause, BSD-2-Clause, BSD-3-Clause |
 | Turn detection | Silero VAD, Smart Turn v3 (bundled with Pipecat) | MIT, BSD-2-Clause |
 | Speech recognition | Deepgram API (`deepgram-sdk`, MIT); local `faster-whisper` with Systran's converted Whisper models | Service terms; MIT |
-| Speech | Fish Audio API; local `kokoro-onnx` with the Kokoro-82M model | Service terms; MIT, Apache-2.0 |
+| Speech | Cartesia and Fish Audio APIs; local `kokoro-onnx` with the Kokoro-82M model | Service terms; MIT, Apache-2.0 |
 | LLM and tools | `openai` (Apache-2.0), `anthropic` (MIT), `mcp` (MIT) | Apache-2.0 and MIT |
 | Web server | `fastapi`, `uvicorn` | MIT, BSD-3-Clause |
 

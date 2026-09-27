@@ -2,7 +2,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#   "pipecat-ai[webrtc,runner,silero,whisper,kokoro,deepgram,fish,openai,anthropic]==1.12.0",
+#   "pipecat-ai[webrtc,runner,silero,whisper,kokoro,deepgram,fish,cartesia,openai,anthropic]==1.12.0",
 #   "mcp>=2.2,<3",
 # ]
 # ///
@@ -95,13 +95,24 @@ tools returned, in its original script.
 """
 
 # Speech services: cloud by default when their key is set, local otherwise.
-STT_KINDS, TTS_KINDS = ('deepgram', 'whisper'), ('fish', 'kokoro')
+STT_KINDS, TTS_KINDS = ('deepgram', 'whisper'), ('cartesia', 'fish', 'kokoro')
 FISH_DEFAULT_VOICE = '933563129e564b19a115bedd57b7406a'  # "Sarah", a public English voice on Fish Audio
+# Cartesia's recommended voices for voice agents (docs.cartesia.ai, Sonic 3.6):
+# key -> (name, voice ID, description).
+CARTESIA_VOICES = {
+    'daniel': ('Daniel', '47c38ca4-5f35-497b-b1a3-415245fb35e1', 'male, American'),
+    'skylar': ('Skylar', 'db6b0ed5-d5d3-463d-ae85-518a07d3c2b4', 'female, American'),
+    'jacqueline': ('Jacqueline', '9626c31c-bec5-4cca-baa8-f8ba9e84c8bc', 'female, American'),
+    'gemma': ('Gemma', '62ae83ad-4f6a-430b-af41-a9bede9286ca', 'female, British'),
+    'archie': ('Archie', 'ef191366-f52f-447a-a398-ed8c0f2943a1', 'male, British'),
+}
+CARTESIA_DEFAULT_VOICE = 'daniel'
 
 
 def speech_services() -> tuple[str, str]:
     stt = os.environ.get('VOICE_STT') or ('deepgram' if os.environ.get('DEEPGRAM_API_KEY') else 'whisper')
-    tts = os.environ.get('VOICE_TTS') or ('fish' if os.environ.get('FISH_API_KEY') else 'kokoro')
+    tts = os.environ.get('VOICE_TTS') or ('cartesia' if os.environ.get('CARTESIA_API_KEY') else
+                                          'fish' if os.environ.get('FISH_API_KEY') else 'kokoro')
     return stt.lower(), tts.lower()
 
 
@@ -272,6 +283,14 @@ def make_stt(kind: str, names: Names):
 
 
 def make_tts(kind: str):
+    if kind == 'cartesia':
+        from pipecat.services.cartesia.tts import CartesiaTTSService
+        voice = os.environ.get('VOICE_CARTESIA_VOICE') or CARTESIA_DEFAULT_VOICE
+        return CartesiaTTSService(
+            api_key=os.environ['CARTESIA_API_KEY'],
+            settings=CartesiaTTSService.Settings(
+                voice=CARTESIA_VOICES[voice.lower()][1] if voice.lower() in CARTESIA_VOICES else voice,
+                **({'model': os.environ['VOICE_CARTESIA_MODEL']} if os.environ.get('VOICE_CARTESIA_MODEL') else {})))
     if kind == 'fish':
         from pipecat.services.fish.tts import FishAudioTTSService
         return FishAudioTTSService(
@@ -825,7 +844,7 @@ def main() -> int:
         if kind not in kinds:
             print(f'{variable} must be one of: {", ".join(kinds)}.', file=sys.stderr)
             return 2
-    for kind, key in (('deepgram', 'DEEPGRAM_API_KEY'), ('fish', 'FISH_API_KEY')):
+    for kind, key in (('deepgram', 'DEEPGRAM_API_KEY'), ('cartesia', 'CARTESIA_API_KEY'), ('fish', 'FISH_API_KEY')):
         if kind in (stt_kind, tts_kind) and not os.environ.get(key):
             print(f'Set {key} in local-voice-pipecat/.env to use {kind}.', file=sys.stderr)
             return 2

@@ -11,7 +11,7 @@ resolution-markers = [
 [manifest]
 requirements = [
     { name = "mcp", specifier = ">=2.2,<3" },
-    { name = "pipecat-ai", extras = ["webrtc", "runner", "silero", "whisper", "kokoro", "deepgram", "fish", "openai", "anthropic"], specifier = "==1.12.0" },
+    { name = "pipecat-ai", extras = ["webrtc", "runner", "silero", "whisper", "kokoro", "deepgram", "fish", "cartesia", "openai", "anthropic"], specifier = "==1.12.0" },
 ]
 
 [[package]]
