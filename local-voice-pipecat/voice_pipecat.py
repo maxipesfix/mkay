@@ -150,9 +150,16 @@ def submission_problem(name: str, args: dict) -> str | None:
     return None
 
 
+# How read-backs name an app in its current view (the values get_mode returns).
+APP_NAMES = {'claude': 'Claude', 'chatgpt': 'ChatGPT', 'cursor': 'Cursor'}
+VIEW_NAMES = {('claude', 'chat'): 'Claude Chat', ('claude', 'code'): 'Claude Code',
+              ('chatgpt', 'chat'): 'ChatGPT', ('chatgpt', 'code'): 'Codex',
+              ('cursor', 'agents'): "Cursor's Agents window", ('cursor', 'ide'): "Cursor's IDE"}
+
+
 def describe_submission(name: str, args: dict) -> str:
-    """The read-back: exactly what will be sent, and where."""
-    app = args.get('app', 'Cursor')
+    """The read-back: exactly what will be sent, and where (with the app's view in _view)."""
+    app = VIEW_NAMES.get((args.get('app'), args.get('_view'))) or APP_NAMES.get(args.get('app'), args.get('app'))
     if name in ('send_message', 'ask_agent'):
         if args.get('new_chat'):
             where = ' as a new chat' + (f" in {args['project']}" if args.get('project') else '')
@@ -404,6 +411,9 @@ class AgentTools:
                 return 'declined'
             if answer and YES.search(answer):
                 self.pending = None
+                if pending['view'] and await self.current_view(args.get('app')) != pending['view']:
+                    # The view changed since the read-back: the message would land elsewhere.
+                    return await self.read_back(params, name, args, prefix='The view changed. ')
                 return 'confirmed'
             if pending['asks'] >= 2:
                 self.pending = None
@@ -413,14 +423,31 @@ class AgentTools:
             pending['index'] = len(params.context.get_messages())
             await self.speak(params, 'Sorry, yes or no? ' + pending['read_back'])
             return 'ask'
+        return await self.read_back(params, name, args)
+
+    async def read_back(self, params, name: str, args: dict, prefix: str = '') -> str:
+        """Say exactly what will be sent and where, and wait for the user's answer."""
         spoken = dict(args)
         if name == 'submit_draft' and args.get('app') in self.drafts:
             spoken['_draft'] = self.drafts[args['app']]  # Read back what will actually be sent.
+        spoken['_view'] = view = await self.current_view(args.get('app'))
         read_back = describe_submission(name, spoken)
-        self.pending = {'name': name, 'args': args, 'read_back': read_back, 'asks': 1,
+        self.pending = {'name': name, 'args': args, 'read_back': read_back, 'asks': 1, 'view': view,
                         'index': len(params.context.get_messages())}
-        await self.speak(params, read_back)
+        await self.speak(params, prefix + read_back)
         return 'ask'
+
+    async def current_view(self, app: str | None) -> str | None:
+        """The app's current view (get_mode), or None if it cannot be read."""
+        if not app or not any(t.name == 'get_mode' for t in self.tools):
+            return None
+        try:
+            result = await self.mcp.call_tool('get_mode', {'app': app})
+            if not result.is_error:
+                return json.loads('\n'.join(getattr(b, 'text', '') for b in result.content)).get('mode')
+        except Exception as error:
+            log(f'could not read the view of {app}: {error!r}')
+        return None
 
     async def run(self, params, name: str, args: dict) -> str:
         log(f'🛠  {name} {json.dumps(args, ensure_ascii=False)}')

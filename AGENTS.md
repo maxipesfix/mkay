@@ -137,9 +137,10 @@ These were learned by breaking them; keep them unless you have evidence otherwis
   or Claude; no PyTorch.
 - MCP tools bridged directly (progress for "Still waiting", learned names primed into
   Whisper and shared with the push-to-talk client); user muted during tool calls.
-- Read-backs say where a message goes (new chat and project, session, or the open chat);
-  arguments the tools would refuse are refused before the read-back, so nobody confirms
-  a send that cannot happen.
+- Read-backs say where a message goes: the app's current view ("Cursor's IDE", "Codex"),
+  then new chat and project, session, or the open chat. The view is checked again on
+  "yes" (a change means a new read-back), and arguments the tools would refuse are
+  refused before the read-back, so nobody confirms a send that cannot happen.
 - Code-enforced spoken confirmation; own FastAPI server on 127.0.0.1 with Host/Origin
   checks, one session at a time (a new connection replaces the old one).
 - Importable: `create_app` takes `open_tools(user)` and `authorize(request)` hooks,
