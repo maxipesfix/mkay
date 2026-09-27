@@ -147,11 +147,13 @@ class Names:
     """Project and session names learned from tool results, used to prime Whisper."""
     KEEP = 300  # Per kind; a full --prime scan in local-voice-ptt can return well over 100 sessions.
 
-    def __init__(self):
+    def __init__(self, path: Path | None = NAMES_FILE):
+        """Names are loaded from and saved to ``path``; None keeps them in memory only."""
+        self.path = path
         self.fixed = [w.strip() for w in os.environ.get('VOICE_VOCABULARY', '').split(',') if w.strip()]
         self.learned: dict[str, list[str]] = {'projects': [], 'sessions': []}
         try:
-            saved = json.loads(NAMES_FILE.read_text())
+            saved = json.loads(path.read_text()) if path else {}
             for kind in self.learned:
                 self.learned[kind] = [n for n in saved.get(kind, []) if isinstance(n, str)
                                       and not NOT_A_NAME.fullmatch(n.strip())][:self.KEEP]
@@ -181,9 +183,10 @@ class Names:
         if changed:
             for kind in self.learned:
                 del self.learned[kind][self.KEEP:]
+        if changed and self.path:
             try:
-                NAMES_FILE.parent.mkdir(parents=True, exist_ok=True)
-                NAMES_FILE.write_text(json.dumps(self.learned, ensure_ascii=False, indent=1))
+                self.path.parent.mkdir(parents=True, exist_ok=True)
+                self.path.write_text(json.dumps(self.learned, ensure_ascii=False, indent=1))
             except OSError as error:
                 log(f'could not save learned names: {error}')
         return changed
@@ -295,10 +298,10 @@ class AgentTools:
     say yes and not no. A no, or no clear answer after two read-backs, cancels it.
     """
 
-    def __init__(self, mcp_client, tools):
+    def __init__(self, mcp_client, tools, names: Names | None = None):
         self.mcp, self.tools = mcp_client, tools
         self.submitting = {t.name for t in tools if t.annotations and t.annotations.destructive_hint}
-        self.names = Names()
+        self.names = names or Names()
         self.reset()
 
     def reset(self) -> None:
@@ -564,7 +567,21 @@ async def run_bot(connection, agent_tools: AgentTools, provider: str) -> None:
         agent_tools.worker = agent_tools.runner = None
 
 
-def create_app(agent_tools_factory, provider: str, allowed_hosts: set[str]):
+LOCAL_USER = 'local'
+
+
+def create_app(provider: str, allowed_hosts: set[str], open_tools, *, authorize=None, lifespan=None):
+    """The web page, WebRTC signaling and one voice session per user.
+
+    Args:
+        provider: LLM provider for the sessions (see PROVIDERS).
+        allowed_hosts: Host header values to accept; Origin must be one of them too.
+        open_tools: ``open_tools(user)`` returns an async context manager yielding the
+            AgentTools for one session of that user.
+        authorize: ``await authorize(request)`` returns the user starting a session, or
+            raises HTTPException to refuse. None serves a single local user.
+        lifespan: Optional async context manager factory run for the app's lifetime.
+    """
     from fastapi import FastAPI, HTTPException, Request
     from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
     from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
@@ -574,18 +591,19 @@ def create_app(agent_tools_factory, provider: str, allowed_hosts: set[str]):
 
     allowed_origins = {f'{scheme}://{host}' for host in allowed_hosts for scheme in ('http', 'https')}
     handler = SmallWebRTCRequestHandler()
-    state: dict = {'tools': None, 'bot': None, 'sessions': set()}
+    # user -> (session task, AgentTools of that session); session id -> user.
+    state: dict = {'bots': {}, 'sessions': {}}
 
     @asynccontextmanager
-    async def lifespan(app):
-        async with agent_tools_factory() as agent_tools:
-            state['tools'] = agent_tools
+    async def app_lifespan(app):
+        async with (lifespan(app) if lifespan else _nothing()):
             yield
-            if state['bot'] and not state['bot'].done():
-                await end_session(state['bot'])
+            for task, _ in list(state['bots'].values()):
+                if not task.done():
+                    await end_session(task)
             await handler.close()
 
-    app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+    app = FastAPI(lifespan=app_lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 
     @app.middleware('http')
     async def check_host_and_origin(request: Request, call_next):
@@ -607,37 +625,44 @@ def create_app(agent_tools_factory, provider: str, allowed_hosts: set[str]):
     @app.post('/start')
     async def start(request: Request):
         # The prebuilt client asks for a session, then sends its WebRTC offer to it.
-        # No ICE servers: host candidates reach this Mac locally and over a private network.
+        user = await authorize(request) if authorize else LOCAL_USER
         session_id = str(uuid.uuid4())
-        state['sessions'].add(session_id)
+        state['sessions'][session_id] = user
         return {'sessionId': session_id}
 
-    async def offer(request: SmallWebRTCRequest):
+    async def offer(request: SmallWebRTCRequest, user: str):
         async def on_connection(connection: SmallWebRTCConnection):
-            previous = state['bot']
-            state['bot'] = asyncio.create_task(start_bot(connection, previous))
+            previous = state['bots'].get(user)
+            task = asyncio.create_task(start_bot(connection, user, previous[0] if previous else None))
+            state['bots'][user] = (task, None)
         return await handler.handle_web_request(request=request, webrtc_connection_callback=on_connection)
 
-    async def start_bot(connection, previous: asyncio.Task | None) -> None:
-        # One session at a time: a new connection (for example a reloaded page) replaces the
-        # old one, so two conversations never drive the apps at once.
-        agent_tools = state['tools']
+    async def start_bot(connection, user: str, previous: asyncio.Task | None) -> None:
+        # One session per user: a new connection (for example a reloaded page) replaces the
+        # old one, so two conversations never drive the same desktop at once.
         if previous and not previous.done():
             log('New browser connection; ending the previous session.')
             await end_session(previous)
-        agent_tools.reset()
+        me = asyncio.current_task()
         log('Browser connected; starting a session.')
         try:
-            await run_bot(connection, agent_tools, provider)
+            async with open_tools(user) as agent_tools:
+                agent_tools.reset()
+                state['bots'][user] = (me, agent_tools)
+                await run_bot(connection, agent_tools, provider)
         except Exception as error:
             log(f'Session failed: {error!r}')
         finally:
+            if state['bots'].get(user, (None,))[0] is me:
+                del state['bots'][user]
             log('Session ended.')
 
     async def end_session(task: asyncio.Task) -> None:
-        runner = state['tools'].runner
-        if runner:
-            await runner.cancel()
+        agent_tools = next((tools for bot, tools in state['bots'].values() if bot is task), None)
+        if agent_tools and agent_tools.runner:
+            await agent_tools.runner.cancel()
+        else:
+            task.cancel()
         try:
             await asyncio.wait_for(task, 5)
         except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
@@ -645,14 +670,17 @@ def create_app(agent_tools_factory, provider: str, allowed_hosts: set[str]):
 
     @app.api_route('/sessions/{session_id}/api/offer', methods=['POST', 'PATCH'])
     async def session_offer(session_id: str, request: Request):
-        if session_id not in state['sessions']:
+        user = state['sessions'].get(session_id)
+        if user is None:
             raise HTTPException(status_code=404, detail='Unknown session')
+        if authorize and await authorize(request) != user:
+            raise HTTPException(status_code=403, detail='Session belongs to another user')
         data = await request.json()
         if request.method == 'POST':
             return await offer(SmallWebRTCRequest(
                 sdp=data['sdp'], type=data['type'], pc_id=data.get('pc_id'),
                 restart_pc=data.get('restart_pc'),
-                request_data=data.get('request_data') or data.get('requestData')))
+                request_data=data.get('request_data') or data.get('requestData')), user)
         await handler.handle_patch_request(SmallWebRTCPatchRequest(
             pc_id=data['pc_id'], candidates=[IceCandidate(**c) for c in data.get('candidates', [])]))
         return {'status': 'success'}
@@ -662,6 +690,11 @@ def create_app(agent_tools_factory, provider: str, allowed_hosts: set[str]):
         return JSONResponse({'detail': f'missing field {error}'}, status_code=400)
 
     return app
+
+
+@asynccontextmanager
+async def _nothing():
+    yield
 
 
 def main() -> int:
@@ -710,21 +743,29 @@ def main() -> int:
         print(f'MCP server not found at {server}; set AGENT_MCP.', file=sys.stderr)
         return 2
 
+    shared: dict = {}
+
     @asynccontextmanager
-    async def agent_tools_factory():
+    async def lifespan(app):
+        # One MCP server for the app's lifetime; each session gets a fresh conversation.
         from mcp import Client, StdioServerParameters
         params = StdioServerParameters(command=uv, args=['run', '--script', server])
         async with Client(params, read_timeout_seconds=TOOL_TIMEOUT + 40) as mcp_client:
             tools = (await mcp_client.list_tools()).tools
+            shared['tools'] = AgentTools(mcp_client, tools)
             model = os.environ.get('VOICE_MODEL') or PROVIDERS[provider][1]
             log(f'Ready: {len(tools)} tools, {provider} {model}, effort {os.environ.get("VOICE_EFFORT", "low")}, '
                 f'speech {stt_kind} in, {tts_kind} out. '
                 f'Open http://localhost:{args.port}/ and allow the microphone (Ctrl-C to quit).')
-            yield AgentTools(mcp_client, tools)
+            yield
+
+    @asynccontextmanager
+    async def open_tools(user):
+        yield shared['tools']
 
     names = {'localhost', '127.0.0.1', '[::1]'}
     allowed_hosts = {f'{name}:{args.port}' for name in names} | set(args.allowed_host)
-    app = create_app(agent_tools_factory, provider, allowed_hosts)
+    app = create_app(provider, allowed_hosts, open_tools, lifespan=lifespan)
 
     import uvicorn
     log(f'Starting the MCP server and listening on {args.host}:{args.port}...')

@@ -125,6 +125,17 @@ The plan for using it from a phone, not implemented yet:
   `Tailscale-User-Login` header), keep the session alive across the phone's screen
   locking, and a mobile-friendly page.
 
+## Using it as a library
+
+`voice_pipecat.py` is also importable (its `main()` only runs as a script). A server
+can build on it without changing it: `create_app(provider, allowed_hosts, open_tools,
+authorize=..., lifespan=...)` serves the page, the WebRTC signaling and one voice
+session per user. `authorize(request)` names the user starting a session (the local
+server serves a single local user), and `open_tools(user)` supplies that session's
+`AgentTools` around any MCP client, for example one connected through
+[`../multi-agent-mcp/connector.py`](../multi-agent-mcp/README.md#remote-voice-servers-connector).
+`Names(path=None)` keeps learned names in memory instead of the shared file.
+
 ## Troubleshooting
 
 - **"Microphone blocked" on the page:** allow the microphone for `localhost` in the
