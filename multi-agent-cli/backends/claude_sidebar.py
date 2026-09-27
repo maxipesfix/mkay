@@ -400,12 +400,13 @@ end tell
 if frontBundle is not "com.anthropic.claudefordesktop" then error "Claude is not frontmost; no keys were sent."
 if (system attribute "CTL_KEY") is "paste" then
     -- Clipboard paste handles long, multiline and Unicode text; restore the clipboard afterwards.
+    -- Read the text through the shell: system attribute decodes it as MacRoman, not UTF-8.
     set oldClipboard to missing value
     try
         set oldClipboard to the clipboard as record
     end try
     try
-        set the clipboard to (system attribute "CTL_PASTE")
+        set the clipboard to (do shell script "printf %s \\"$CTL_PASTE\\"" without altering line endings)
         tell application "System Events" to keystroke "v" using command down
         delay 0.4
     on error errText number errNum

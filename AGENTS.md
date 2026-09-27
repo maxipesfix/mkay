@@ -57,6 +57,9 @@ These were learned by breaking them; keep them unless you have evidence otherwis
 - **Verify input from what is rendered.** Cursor's composer `AXValue` is stale for
   seconds; read its paragraphs (skip `is-editor-empty`). Empty ChatGPT/Codex composers
   report `"\n" + label` ("Ask ChatGPT", "Work with ChatGPT", "Do anything").
+- **Pass text to AppleScript as UTF-8.** `system attribute` decodes environment
+  variables as MacRoman, so "–", curly quotes or Japanese were pasted garbled and failed
+  verification; read them with `do shell script "printf %s \"$VAR\""` instead.
 - **Focus lands late.** Set `AXFocused`, wait, confirm, retry for ~2 s with a fresh
   reference, and refuse to paste without confirmed focus.
 - **Content loads late.** After expanding a ChatGPT project, wait for its rows to

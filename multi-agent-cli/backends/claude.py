@@ -159,7 +159,8 @@ return output
 
 
 SESSION_SCRIPT = r'''
-set needle to system attribute "CLAUDE_SESSION"
+-- Through the shell: system attribute decodes the title as MacRoman, not UTF-8.
+set needle to do shell script "printf %s \"$CLAUDE_SESSION\""
 
 tell application "Claude" to activate
 delay 0.3
