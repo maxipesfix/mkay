@@ -114,6 +114,10 @@ These were learned by breaking them; keep them unless you have evidence otherwis
   token, wss only, fresh MCP server per connection, backoff, `--read-only` refusing
   submitting tools on the Mac). Checked 2026-09-26 against a stand-in server: tool
   listing, a read-only call, a refused send, a wrong token, and ws:// to a remote host.
+- `connector.py --login SERVER`: device-code sign-in (one-time code shown on the Mac and
+  checked on the server's signed-in page; the token and server address are saved with
+  mode 600, so later runs need no options). Checked 2026-09-27 against a local server:
+  code, approval, token saved once, connection, and unlinking stopping the connector.
 
 **Voice client** (`local-voice-ptt`)
 - Push-to-talk (right Command by default; works with JIS keyboards and remapped keys),
@@ -177,9 +181,6 @@ These were learned by breaking them; keep them unless you have evidence otherwis
 - MCP tool descriptions keep docstring indentation; clean them up.
 
 **Next steps (roadmap)**
-- `connector.py --pair URL`: device-code pairing (a short one-time code confirmed on the
-  server's signed-in web page; the token is delivered to the connector and saved with
-  mode 600), instead of copying a token by hand.
 - `run_bot` taking any Pipecat transport (not only SmallWebRTC), so servers can use
   other transports such as Daily.
 - `local-voice-pipecat` from a phone on your own network: `tailscale serve` for HTTPS,

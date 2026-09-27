@@ -171,15 +171,27 @@ over stdio, and passes MCP messages (JSON-RPC, one per WebSocket message) betwee
 two. The server can then use every tool listed above, exactly as a local client would.
 
 ```bash
-echo 'DEVICE-TOKEN' > ~/.config/agent-mcp/connector-token && chmod 600 ~/.config/agent-mcp/connector-token
-./connector.py --url wss://voice.example.com/connector
-./connector.py --url wss://voice.example.com/connector --read-only
+./connector.py --login https://voice.example.com   # first time: link this Mac, then connect
+./connector.py                                     # later: the saved server and token
+./connector.py --read-only
 ```
+
+- `--login SERVER` links this Mac to your account on that server, like `gh auth login`:
+  it asks the server for a one-time code (`POST /pair/start`), prints it and opens the
+  server's `/pair` page, where you sign in and link the Mac only if the page shows the
+  same code; meanwhile it polls `POST /pair/poll` until the server hands over a device
+  token for this Mac. The token and the server's connector address are saved with mode
+  600 next to `--token-file`, so later runs need no options. Your account password never
+  reaches the connector, and each Mac has its own token that the server can revoke.
+  `--no-browser` prints the page address instead of opening it. `https://` is required
+  (`http://` only to this Mac, for testing).
+- Without `--login`, the token can also be set by hand (`AGENT_CONNECTOR_TOKEN` or
+  `--token-file`) and the server with `--url wss://voice.example.com/connector`.
 
 - Each connection gets a fresh MCP server. When the server ends a session (close code
   4000) the connector reconnects at once; after other disconnects it retries after 1, 2,
-  5, 10 and then every 30 seconds. A refused token (HTTP 401/403 or close code 4001)
-  stops it, since retrying cannot help.
+  5, 10 and then every 30 seconds. A refused token (HTTP 401/403 or close code 4001) or
+  an unlinked Mac (close code 4003) stops it, since retrying cannot help.
 - It requires `wss://`; plain `ws://` is accepted only to this Mac, for testing.
 - `--read-only` refuses, here on the Mac, every tool the MCP server marks as submitting
   (`send_message`, `submit_draft`, `ask_agent`, `cursor_answer_question`), whatever the
@@ -192,7 +204,10 @@ echo 'DEVICE-TOKEN' > ~/.config/agent-mcp/connector-token && chmod 600 ~/.config
   (default `~/.config/agent-mcp/connector-token`).
 
 The server side is not part of this repository. It accepts the connector's WebSocket,
-checks the token, and speaks MCP over it as a client.
+checks the token, and speaks MCP over it as a client; for `--login` it also serves
+`/pair/start`, `/pair/poll` (JSON: `device_code`, `user_code`, `verification_uri`,
+`interval`, `expires_in`; then `status` `pending`, `approved` with `token`, or `expired`)
+and the signed-in `/pair` page.
 
 ## MCP smoke test
 

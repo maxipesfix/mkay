@@ -15,6 +15,12 @@ The server can call any tool agent_mcp.py offers, with this Mac's accessibility 
 --read-only refuses tools that submit (send messages, answer questions) here on the Mac,
 whatever the server asks. Ctrl-C disconnects.
 
+Sign-in: --login https://SERVER links this Mac to your account on that server, like
+`gh auth login`: it shows a one-time code and opens the server's page, where you sign in
+and check that the page shows the same code. The server then gives this Mac its own
+device token, saved (mode 600) with the server's address, so later runs need no options.
+Your account password never reaches the connector.
+
 Token: AGENT_CONNECTOR_TOKEN, or the file given by --token-file
 (default ~/.config/agent-mcp/connector-token).
 """
@@ -26,16 +32,21 @@ import json
 import os
 import shutil
 import signal
+import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
+import webbrowser
 from pathlib import Path
 from urllib.parse import urlparse
 
 HERE = Path(__file__).resolve().parent
 TOKEN_FILE = Path.home() / '.config' / 'agent-mcp' / 'connector-token'
 LOCAL_HOSTS = {'localhost', '127.0.0.1', '::1'}
-# Close codes the server uses: the token is refused (stop), or the session ended (reconnect now).
-TOKEN_REFUSED, SESSION_ENDED = 4001, 4000
+# Close codes the server uses: the token is refused or this Mac was unlinked (stop), or the
+# session ended (reconnect now).
+TOKEN_REFUSED, SESSION_ENDED, UNLINKED = 4001, 4000, 4003
 BACKOFF = (1, 2, 5, 10, 30)
 STABLE_SECONDS = 30
 
@@ -120,6 +131,66 @@ async def relay(websocket, command: list[str], guard: ReadOnlyGuard, debug: bool
                 process.kill()
 
 
+def url_file(token_file: Path) -> Path:
+    """The saved server address, next to the token."""
+    return token_file.with_name('connector-url')
+
+
+def post_json(url: str, data: dict) -> dict:
+    request = urllib.request.Request(url, data=json.dumps(data).encode(), method='POST',
+                                     headers={'Content-Type': 'application/json'})
+    with urllib.request.urlopen(request, timeout=30) as response:
+        return json.loads(response.read())
+
+
+def computer_name() -> str:
+    try:
+        name = subprocess.run(['scutil', '--get', 'ComputerName'], capture_output=True, text=True,
+                              timeout=5).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        name = ''
+    return name or os.uname().nodename.split('.')[0] or 'Mac'
+
+
+def login(server: str, token_file: Path, open_browser: bool) -> str:
+    """Link this Mac to an account on the server; save and return its connector URL."""
+    parsed = urlparse(server.rstrip('/'))
+    if parsed.scheme != 'https' and not (parsed.scheme == 'http' and parsed.hostname in LOCAL_HOSTS):
+        raise SystemExit('--login needs an https:// address (http:// only to this Mac, for testing).')
+    base = f'{parsed.scheme}://{parsed.netloc}'
+    try:
+        pairing = post_json(f'{base}/pair/start', {'name': computer_name()})
+    except (OSError, ValueError) as error:
+        raise SystemExit(f'Cannot reach {parsed.netloc}: {error}')
+    print(f'\n  Your code: {pairing["user_code"]}\n', flush=True)
+    print(f'Sign in at {pairing["verification_uri"]}')
+    print('and link this Mac only if the page shows the same code.', flush=True)
+    if open_browser:
+        webbrowser.open(pairing['verification_uri'])
+    deadline = time.monotonic() + pairing.get('expires_in', 600)
+    while time.monotonic() < deadline:
+        time.sleep(pairing.get('interval', 3))
+        try:
+            result = post_json(f'{base}/pair/poll', {'device_code': pairing['device_code']})
+        except (OSError, ValueError) as error:
+            log(f'Waiting ({error})')
+            continue
+        if result.get('status') == 'approved':
+            break
+        if result.get('status') == 'expired':
+            raise SystemExit('The code expired or was used. Run --login again.')
+    else:
+        raise SystemExit('The code expired. Run --login again.')
+    url = f'{"wss" if parsed.scheme == "https" else "ws"}://{parsed.netloc}/connector'
+    token_file.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    for path, text in ((token_file, result['token']), (url_file(token_file), url)):
+        path.touch(mode=0o600)
+        path.chmod(0o600)
+        path.write_text(text + '\n')
+    log(f'This Mac is linked. Token saved to {token_file}.')
+    return url
+
+
 async def run(url: str, token: str, command: list[str], read_only: bool, debug: bool) -> int:
     import websockets
     attempt = 0
@@ -136,14 +207,17 @@ async def run(url: str, token: str, command: list[str], read_only: bool, debug: 
         except websockets.InvalidStatus as error:
             code = error.response.status_code
             if code in (401, 403):
-                log('The server refused this device token. Pair this Mac again to get a new one.')
+                log('The server refused this device token. Run with --login to link this Mac again.')
                 return 1
             log(f'The server answered HTTP {code}.')
         except (OSError, websockets.WebSocketException) as error:
             code = None
             log(f'Cannot reach the server: {error}')
         if code == TOKEN_REFUSED:
-            log('The server refused this device token. Pair this Mac again to get a new one.')
+            log('The server refused this device token. Run with --login to link this Mac again.')
+            return 1
+        if code == UNLINKED:
+            log('This Mac was unlinked from your account. Run with --login to link it again.')
             return 1
         if code == SESSION_ENDED:
             continue  # A fresh MCP server for the next session, at once.
@@ -155,14 +229,23 @@ async def run(url: str, token: str, command: list[str], read_only: bool, debug: 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('--login', metavar='SERVER',
+                        help='Link this Mac to your account on SERVER (such as https://app.mkay.ai), then connect.')
+    parser.add_argument('--no-browser', action='store_true', help='With --login, print the page address instead of opening it.')
     parser.add_argument('--url', default=os.environ.get('AGENT_CONNECTOR_URL'),
-                        help='Server endpoint, e.g. wss://voice.example.com/connector (or AGENT_CONNECTOR_URL).')
+                        help='Server endpoint, e.g. wss://voice.example.com/connector (or AGENT_CONNECTOR_URL; '
+                             'default: saved by --login next to the token).')
     parser.add_argument('--token-file', type=Path, default=TOKEN_FILE, help=f'Default: {TOKEN_FILE}')
     parser.add_argument('--read-only', action='store_true', help='Refuse tools that submit, on this Mac.')
     parser.add_argument('--debug', action='store_true', help="Show the MCP server's own log.")
     args = parser.parse_args()
+    if args.login:
+        args.url = login(args.login, args.token_file, not args.no_browser)
     if not args.url:
-        parser.error('--url (or AGENT_CONNECTOR_URL) is required')
+        try:
+            args.url = url_file(args.token_file).read_text().strip()
+        except OSError:
+            parser.error('--login SERVER (first time) or --url is required')
     parsed = urlparse(args.url)
     if parsed.scheme != 'wss' and not (parsed.scheme == 'ws' and parsed.hostname in LOCAL_HOSTS):
         parser.error('use wss:// (ws:// only to this Mac, for testing)')
