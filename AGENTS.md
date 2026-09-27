@@ -125,6 +125,9 @@ These were learned by breaking them; keep them unless you have evidence otherwis
   Whisper and shared with the push-to-talk client); user muted during tool calls.
 - Code-enforced spoken confirmation; own FastAPI server on 127.0.0.1 with Host/Origin
   checks, one session at a time (a new connection replaces the old one).
+- Cloud speech: Deepgram (keyterms from learned names, model-improvement opt-out) and
+  Fish Audio when their keys are set, else local Whisper and Kokoro (`VOICE_STT`,
+  `VOICE_TTS`); a cloud-speech session uses ~160 MB and ~10% of a core when idle.
 - Checked 2026-09-26: tools and schemas, Host/Origin refusals, a browser session
   starting and speaking, reconnect and Ctrl-C, and the confirmation gate offline; first
   spoken use (status, listings, opening a session). The Whisper event-loop fix is
@@ -139,6 +142,9 @@ These were learned by breaking them; keep them unless you have evidence otherwis
 **Not yet verified live**
 - Pipecat client: a longer spoken conversation after the event-loop fix, barge-in,
   and a send through it (read-only tools and opening a session worked by voice).
+- Pipecat client with Deepgram and Fish: a spoken conversation (only the greeting was
+  checked), Japanese recognition (`VOICE_STT_LANGUAGE=ja` or `multi`) and Fish reading
+  Japanese names.
 - Claude navigation test on Claude 2.9939.2 (only `mode`, `projects`, `status`, `read`,
   session opening and sends were checked after the update).
 - Cursor: `answer` with a free-text option, in the IDE view, and with several questions;

@@ -2,7 +2,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#   "pipecat-ai[webrtc,runner,silero,whisper,kokoro,openai,anthropic]==1.12.0",
+#   "pipecat-ai[webrtc,runner,silero,whisper,kokoro,deepgram,fish,openai,anthropic]==1.12.0",
 #   "mcp>=2.2,<3",
 # ]
 # ///
@@ -45,11 +45,6 @@ the user's Mac through tools. The user speaks to you; your text replies are read
 Speak briefly and naturally: one to three sentences, no markdown, lists, emojis, code, file
 paths or URLs unless asked. Summarize long agent replies in a sentence or two and offer details.
 
-Your speech engine can only pronounce English. Write every name or phrase in Japanese or
-another non-Latin script in Latin letters when you speak it: Japanese in Hepburn romaji
-(そばとも -> Sobatomo, おとひろ -> Otohiro). In tool arguments, always use the exact title the
-tools returned, in its original script.
-
 Tools act on the real apps. Useful patterns:
 - "What's going on?" -> status.
 - "Ask Cursor to ..." or "tell Claude ..." -> ask_agent, which sends and waits for the reply.
@@ -87,6 +82,25 @@ Summarize the whole reply, not just its first sentence.
 Transcriptions can contain recognition errors in names: match them to the titles that
 list_sessions or list_projects return rather than guessing, and ask when unsure.
 """
+
+# Added to the system prompt when the speech engine is Kokoro, which pronounces English only.
+ENGLISH_ONLY_SPEECH = """
+Your speech engine can only pronounce English. Write every name or phrase in Japanese or
+another non-Latin script in Latin letters when you speak it: Japanese in Hepburn romaji
+(そばとも -> Sobatomo, おとひろ -> Otohiro). In tool arguments, always use the exact title the
+tools returned, in its original script.
+"""
+
+# Speech services: cloud by default when their key is set, local otherwise.
+STT_KINDS, TTS_KINDS = ('deepgram', 'whisper'), ('fish', 'kokoro')
+FISH_DEFAULT_VOICE = '933563129e564b19a115bedd57b7406a'  # "Sarah", a public English voice on Fish Audio
+
+
+def speech_services() -> tuple[str, str]:
+    stt = os.environ.get('VOICE_STT') or ('deepgram' if os.environ.get('DEEPGRAM_API_KEY') else 'whisper')
+    tts = os.environ.get('VOICE_TTS') or ('fish' if os.environ.get('FISH_API_KEY') else 'kokoro')
+    return stt.lower(), tts.lower()
+
 
 YES = re.compile(r"\b(yes|yeah|yep|yup|sure|confirm(ed)?|go ahead|do it|send( it)?|correct|ok(ay)?)\b", re.I)
 NO = re.compile(r"\b(no|not|nope|don'?t|stop|cancel|wait|never ?mind|abort)\b", re.I)  # checked first
@@ -175,6 +189,10 @@ class Names:
         return changed
 
     def hotwords(self) -> str:
+        return ', '.join(self.terms())
+
+    def terms(self) -> list[str]:
+        """Names to prime speech recognition with: fixed vocabulary first, then learned names."""
         words, used = [], 0
         for name in dict.fromkeys(self.fixed + BASE_VOCABULARY + self.learned['projects']
                                   + self.learned['sessions']):
@@ -182,7 +200,7 @@ class Names:
                 break
             words.append(name)
             used += len(name) + 2
-        return ', '.join(words)
+        return words
 
 
 def allow_faster_whisper() -> None:
@@ -199,7 +217,37 @@ def allow_faster_whisper() -> None:
         sys.modules['mlx_whisper'] = types.ModuleType('mlx_whisper')
 
 
-def make_stt(model: str, hotwords: str | None):
+def make_stt(kind: str, names: Names):
+    model = os.environ.get('VOICE_STT_MODEL') or ''
+    if kind == 'deepgram':
+        from pipecat.services.deepgram.stt import DeepgramSTTService
+        if re.fullmatch(r'(tiny|base|small|medium|large)(\.en|-v\d)?', model):
+            model = ''  # A Whisper size from an older .env; not a Deepgram model.
+        return DeepgramSTTService(
+            api_key=os.environ['DEEPGRAM_API_KEY'],
+            mip_opt_out=True,  # Keep users' audio out of Deepgram's model improvement program.
+            settings=DeepgramSTTService.Settings(
+                model=model or 'nova-3-general',
+                language=os.environ.get('VOICE_STT_LANGUAGE') or 'en',
+                keyterm=names.terms() or None))
+    return make_whisper_stt(model or 'small.en', names.hotwords() or None)
+
+
+def make_tts(kind: str):
+    if kind == 'fish':
+        from pipecat.services.fish.tts import FishAudioTTSService
+        return FishAudioTTSService(
+            api_key=os.environ['FISH_API_KEY'],
+            settings=FishAudioTTSService.Settings(
+                voice=os.environ.get('VOICE_FISH_VOICE') or FISH_DEFAULT_VOICE,
+                **({'model': os.environ['VOICE_FISH_MODEL']} if os.environ.get('VOICE_FISH_MODEL') else {})))
+    from pipecat.services.kokoro.tts import KokoroTTSService
+    return KokoroTTSService(settings=KokoroTTSService.Settings(
+        voice=os.environ.get('VOICE_KOKORO_VOICE') or 'af_heart',
+        **({'speed': float(os.environ['VOICE_KOKORO_SPEED'])} if os.environ.get('VOICE_KOKORO_SPEED') else {})))
+
+
+def make_whisper_stt(model: str, hotwords: str | None):
     """Pipecat's faster-whisper service, with decoding kept off the event loop.
 
     Pipecat 1.12 runs WhisperModel.transcribe in a thread, but transcribe only returns a
@@ -368,10 +416,16 @@ class AgentTools:
 
     async def update_hotwords(self) -> None:
         from pipecat.frames.frames import STTUpdateSettingsFrame
-        allow_faster_whisper()
-        from pipecat.services.whisper.stt import WhisperSTTService
-        await self.worker.queue_frames([STTUpdateSettingsFrame(
-            delta=WhisperSTTService.Settings(hotwords=self.names.hotwords()))])
+        if speech_services()[0] == 'deepgram':
+            # Deepgram reconnects to apply new keyterms; this runs during a tool call, while
+            # the user is muted, so no speech is lost.
+            from pipecat.services.deepgram.stt import DeepgramSTTService
+            delta = DeepgramSTTService.Settings(keyterm=self.names.terms())
+        else:
+            allow_faster_whisper()
+            from pipecat.services.whisper.stt import WhisperSTTService
+            delta = WhisperSTTService.Settings(hotwords=self.names.hotwords())
+        await self.worker.queue_frames([STTUpdateSettingsFrame(delta=delta)])
 
 
 def audio_watch(silence_seconds: float = 3.0):
@@ -417,7 +471,7 @@ def quiet_pipecat_audio_timeouts(record) -> bool:
     return 'No audio frame received within the specified time' not in record['message']
 
 
-def make_llm(provider: str):
+def make_llm(provider: str, prompt: str):
     model = os.environ.get('VOICE_MODEL') or PROVIDERS[provider][1]
     effort = os.environ.get('VOICE_EFFORT', 'low')
     if provider == 'openai':
@@ -426,13 +480,13 @@ def make_llm(provider: str):
         return OpenAIResponsesLLMService(
             api_key=os.environ['OPENAI_API_KEY'],
             settings=OpenAIResponsesLLMService.Settings(
-                model=model, system_instruction=SYSTEM_PROMPT,
+                model=model, system_instruction=prompt,
                 reasoning=OpenAIResponsesReasoningConfig(effort=effort)))
     from pipecat.services.anthropic.llm import AnthropicLLMService
     return AnthropicLLMService(
         api_key=os.environ['ANTHROPIC_API_KEY'],
         settings=AnthropicLLMService.Settings(
-            model=model, system_instruction=SYSTEM_PROMPT, extra={'output_config': {'effort': effort}}))
+            model=model, system_instruction=prompt, extra={'output_config': {'effort': effort}}))
 
 
 async def run_bot(connection, agent_tools: AgentTools, provider: str) -> None:
@@ -444,7 +498,6 @@ async def run_bot(connection, agent_tools: AgentTools, provider: str) -> None:
     from pipecat.processors.aggregators.llm_context import LLMContext
     from pipecat.processors.aggregators.llm_response_universal import (LLMContextAggregatorPair,
                                                                        LLMUserAggregatorParams)
-    from pipecat.services.kokoro.tts import KokoroTTSService
     from pipecat.transports.base_transport import TransportParams
     from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
     from pipecat.turns.user_mute.function_call_user_mute_strategy import FunctionCallUserMuteStrategy
@@ -452,11 +505,10 @@ async def run_bot(connection, agent_tools: AgentTools, provider: str) -> None:
 
     transport = SmallWebRTCTransport(
         webrtc_connection=connection, params=TransportParams(audio_in_enabled=True, audio_out_enabled=True))
-    stt = make_stt(os.environ.get('VOICE_STT_MODEL', 'small.en'), agent_tools.names.hotwords() or None)
-    tts = KokoroTTSService(settings=KokoroTTSService.Settings(
-        voice=os.environ.get('VOICE_KOKORO_VOICE') or 'af_heart',
-        **({'speed': float(os.environ['VOICE_KOKORO_SPEED'])} if os.environ.get('VOICE_KOKORO_SPEED') else {})))
-    llm = make_llm(provider)
+    stt_kind, tts_kind = speech_services()
+    stt = make_stt(stt_kind, agent_tools.names)
+    tts = make_tts(tts_kind)
+    llm = make_llm(provider, SYSTEM_PROMPT + (ENGLISH_ONLY_SPEECH if tts_kind == 'kokoro' else ''))
     agent_tools.register(llm)
 
     context = LLMContext(tools=agent_tools.schemas())
@@ -643,6 +695,15 @@ def main() -> int:
         print(f'Set {key_var} in local-voice-pipecat/.env for VOICE_PROVIDER={provider} (see .env.example).',
               file=sys.stderr)
         return 2
+    stt_kind, tts_kind = speech_services()
+    for kind, kinds, variable in ((stt_kind, STT_KINDS, 'VOICE_STT'), (tts_kind, TTS_KINDS, 'VOICE_TTS')):
+        if kind not in kinds:
+            print(f'{variable} must be one of: {", ".join(kinds)}.', file=sys.stderr)
+            return 2
+    for kind, key in (('deepgram', 'DEEPGRAM_API_KEY'), ('fish', 'FISH_API_KEY')):
+        if kind in (stt_kind, tts_kind) and not os.environ.get(key):
+            print(f'Set {key} in local-voice-pipecat/.env to use {kind}.', file=sys.stderr)
+            return 2
     uv = shutil.which('uv') or '/opt/homebrew/bin/uv'
     server = os.environ.get('AGENT_MCP') or str(MCP_SERVER)
     if not Path(server).is_file():
@@ -656,7 +717,8 @@ def main() -> int:
         async with Client(params, read_timeout_seconds=TOOL_TIMEOUT + 40) as mcp_client:
             tools = (await mcp_client.list_tools()).tools
             model = os.environ.get('VOICE_MODEL') or PROVIDERS[provider][1]
-            log(f'Ready: {len(tools)} tools, {provider} {model}, effort {os.environ.get("VOICE_EFFORT", "low")}. '
+            log(f'Ready: {len(tools)} tools, {provider} {model}, effort {os.environ.get("VOICE_EFFORT", "low")}, '
+                f'speech {stt_kind} in, {tts_kind} out. '
                 f'Open http://localhost:{args.port}/ and allow the microphone (Ctrl-C to quit).')
             yield AgentTools(mcp_client, tools)
 
