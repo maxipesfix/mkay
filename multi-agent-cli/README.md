@@ -112,7 +112,7 @@ messages that contain spaces.
 | `sessions --project "NAME"` | ✅ | ✅ | ✅ |
 | `sessions --recents` | ✅ | ✅ | Refused (exit 2) |
 | `status` | ✅ | ✅ | ✅ |
-| `new [--project NAME]` | — | ✅ | — |
+| `new [--project NAME]` | — | ✅ | ✅ |
 | `session "TITLE"` | ✅ | ✅ | ✅ |
 | `project "NAME"` | — | — | ✅ |
 | `read` | ✅ | ✅ | ✅ |
@@ -130,7 +130,7 @@ messages that contain spaces.
 | `session "TITLE"` | Opens a session matching the title |
 | `read` | Prints the latest assistant reply in the selected conversation |
 | `status` | Read-only: view, whether the open conversation is still working, and more; see below |
-| `new [--project "NAME"]` | ChatGPT/Codex: opens a new, empty conversation (inside the project if given) by pressing the sidebar's New chat button, and checks that the old conversation cleared |
+| `new [--project "NAME"]` | Opens a new, empty conversation, sending nothing. ChatGPT/Codex: inside the project if given, by pressing the sidebar's New chat button, and checks that the old conversation cleared. Cursor Agents: presses New Chat and picks the project in the chat's "Select a project" menu (Recents, else the local folder of that name under On This Mac). Cursor IDE: presses New Agent in the project's open workspace window and checks for one more, empty "New Agent" tab |
 | `type "TEXT"` | Pastes and verifies text in the empty prompt box without submitting |
 | `send "TEXT"` | Pastes and verifies text, then presses Return to submit |
 | `enter` | Submits the existing draft |

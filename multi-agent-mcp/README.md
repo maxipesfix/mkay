@@ -39,10 +39,10 @@ multi-agent-mcp/
 | `list_projects(app)` | `projects` | Read |
 | `list_sessions(app, project?, recents?)` | `sessions [--project NAME \| --recents]` | Read |
 | `open_session(app, title)` | `session TITLE` | Navigate |
-| `new_chat(app, project?)` | `new [--project NAME]` | Navigate; ChatGPT/Codex only for now |
+| `new_chat(app, project?)` | `new [--project NAME]` | Navigate; ChatGPT/Codex and Cursor (not Claude yet), in the current view |
 | `read_reply(app)` | `read` | Read; returns `reply` and, for Cursor, `pending_question` |
 | `wait_for_reply(app, timeout_seconds?, session?)` | `status` and `read`, polled | Read: waits until the agent finishes |
-| `ask_agent(app, message, session?, new_chat?, project?, timeout_seconds?)` | `session` or `new`, `send`, then waits | Submit: send and wait in one call; `new_chat` starts a new conversation first (ChatGPT/Codex) |
+| `ask_agent(app, message, session?, new_chat?, project?, timeout_seconds?)` | `session` or `new`, `send`, then waits | Submit: send and wait in one call; `new_chat` starts a new conversation first (ChatGPT/Codex, Cursor) |
 | `type_text(app, text)` | `type TEXT` | Draft |
 | `send_message(app, text)` | `send TEXT` | Submit |
 | `submit_draft(app)` | `enter` | Submit |

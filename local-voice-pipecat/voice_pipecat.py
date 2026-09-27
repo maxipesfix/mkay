@@ -48,8 +48,11 @@ paths or URLs unless asked. Summarize long agent replies in a sentence or two an
 Tools act on the real apps. Useful patterns:
 - "What's going on?" -> status.
 - "Ask Cursor to ..." or "tell Claude ..." -> ask_agent, which sends and waits for the reply.
-- "... as a new chat" or "start a new chat in ChatGPT/Codex" -> ask_agent with new_chat=true
-  (optionally project=...), or new_chat on its own. Supported for ChatGPT/Codex only.
+- "... as a new chat" or "start a new chat (or session) in <project>" -> ask_agent with
+  new_chat=true and project=..., or new_chat on its own. Supported for ChatGPT/Codex and Cursor,
+  not Claude yet. project is only valid with new_chat=true; to reach an existing chat, pass
+  session instead. New chats open in the app's current view: for Cursor, the Agents view can use
+  any local project, the IDE view only a project whose window is open (set_mode to choose).
 - "What did Codex say?" -> read_reply.
 - A pending Cursor question: read the question and its lettered options, then ask which one;
   answer with cursor_answer_question.
@@ -128,13 +131,35 @@ TOOL_TIMEOUT = 960
 IDLE_MINUTES = 5
 
 
+# Apps that can open a new chat (agent_mcp.py's NEW_CHAT_APPS).
+NEW_CHAT_APPS = ('chatgpt', 'cursor')
+
+
+def submission_problem(name: str, args: dict) -> str | None:
+    """Why the tools would refuse these arguments, checked before the user is asked to confirm."""
+    if name != 'ask_agent':
+        return None
+    if args.get('session') and args.get('new_chat'):
+        return 'Pass either session (an existing chat) or new_chat=true, not both.'
+    if args.get('project') and not args.get('new_chat'):
+        return ('project applies only with new_chat=true, which starts a new chat in that project; '
+                'to send to an existing chat, pass its session title instead.')
+    if args.get('new_chat') and args.get('app') not in NEW_CHAT_APPS:
+        return (f"New chats are not supported for {args.get('app')} yet; offer to send to one of its "
+                'existing sessions instead.')
+    return None
+
+
 def describe_submission(name: str, args: dict) -> str:
+    """The read-back: exactly what will be sent, and where."""
     app = args.get('app', 'Cursor')
     if name in ('send_message', 'ask_agent'):
         if args.get('new_chat'):
             where = ' as a new chat' + (f" in {args['project']}" if args.get('project') else '')
+        elif args.get('session'):
+            where = f" in {args['session']}"
         else:
-            where = f" in {args['session']}" if args.get('session') else ''
+            where = ', in the chat that is open now'
         return f'Send to {app}{where}: "{args.get("message") or args.get("text")}". Should I send it?'
     if name == 'submit_draft':
         if args.get('_draft'):
@@ -347,6 +372,11 @@ class AgentTools:
     async def handle(self, params) -> None:
         from pipecat.frames.frames import FunctionCallResultProperties
         name, args = params.function_name, dict(params.arguments or {})
+        if name in self.submitting and (problem := submission_problem(name, args)):
+            # Never ask the user to confirm something the tools would refuse after their yes.
+            log(f'{name} refused before read-back: {problem}')
+            await params.result_callback({'status': 'error', 'error': problem, 'note': 'Nothing was sent or read back.'})
+            return
         if name in self.submitting:
             verdict = await self.confirm(params, name, args)
             if verdict == 'ask':

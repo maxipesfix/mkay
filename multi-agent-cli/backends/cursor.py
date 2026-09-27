@@ -5,7 +5,10 @@ Cursor's two views are separate windows. The view is whichever window is main:
 Cursor rejects AXEnhancedUserInterface and exposes its tree via AXManualAccessibility.
 
 Agents view: projects are the sidebar's Repositories groups; sessions are the
-agent rows inside them. Cursor's own "Projects" sidebar section is not listed.
+agent rows inside them. Cursor's own "Projects" sidebar section is not listed. A new
+chat (sidebar "New Chat") picks its project in a "Select a project" menu above the
+composer: Recents first, every local folder under "On This Mac". In the IDE view, a new
+chat is a "New Agent" tab in a workspace window's agent panel.
 IDE view: projects are the open workspace windows; sessions are open agent chat tabs.
 Chat messages and composers are identified by Cursor's DOM classes, which the
 Chromium accessibility tree exposes as AXDOMClassList.
@@ -39,6 +42,11 @@ INLINE_ROLES = {'AXButton', 'AXLink', 'AXStaticText'}
 STOP_LABEL = re.compile(r'(stop|cancel)( generating| generation| response| agent)?(\s*\(.*\)|\s+[^\w\s].*)?',
                         re.IGNORECASE)  # Optional shortcut hint, e.g. "Stop (⌘⌫)"; not "Stop voice input".
 COMPOSER_AREAS = ('composer-bar', 'ui-prompt-input')
+# An IDE chat tab reads "TITLE, Chat Editors: Editor Group 1"; untitled chats are "New Agent".
+CHAT_TAB = re.compile(r'(.+), Chat Editors\b.*', re.DOTALL)
+PROJECT_MENU = 'Select a project'
+# A Recents row also carries its remove button's label: "mkay-cloud Remove mkay-cloud from recents".
+RECENT_SUFFIX = re.compile(r' Remove .+ from recents$')
 
 
 def clean(text):
@@ -202,7 +210,10 @@ class Cursor(Walker):
                 continue
             labels = [c for c in n.get('AXChildren') or [] if 'composer-tab-label' in classes(c)]
             if labels:
-                tabs.append((clean(labels[0].get('AXDescription') or self.row_title(labels[0])), n))
+                # The tab's own label has the title Cursor shows; the inner label's description
+                # is an ID for untitled chats.
+                shown = CHAT_TAB.fullmatch(clean(label(n)))
+                tabs.append((shown[1] if shown else clean(labels[0].get('AXDescription') or self.row_title(labels[0])), n))
         return tabs
 
     def raise_window(self, window):
@@ -226,6 +237,121 @@ class Cursor(Walker):
     def ide_window(self, project):
         matches = [w for w in self.ide_windows() if self.workspace(w).casefold() == project.casefold()]
         return self.unique(matches, 'IDE window for workspace ' + repr(project))
+
+    # New chat
+
+    def project_picker(self):
+        """The new chat's project picker above the composer, or None outside a new chat."""
+        triggers = [n for n, role, _ in self.walk(self.agents_window(), self.LIMIT)
+                    if role == 'AXPopUpButton' and 'ui-select-trigger' in classes(n)]
+        # The environment picker ("This Mac") comes second.
+        return triggers[0] if triggers else None
+
+    def project_menu(self, title=PROJECT_MENU):
+        menus = [n for n, role, _ in self.walk(self.agents_window(), self.LIMIT)
+                 if role == 'AXMenu' and label(n) == title]
+        return menus[0] if menus else None
+
+    def menu_items(self, menu):
+        """(title, item) for a menu's own rows, not those of a submenu opened inside it."""
+        items = []
+        for n, role, anc in self.walk(menu, 2000):
+            if role == 'AXMenuItem' and not any(a.get('AXRole') == 'AXMenu' and a != menu for a in anc):
+                items.append((RECENT_SUFFIX.sub('', clean(label(n))), n))
+        return items
+
+    def wait_for(self, find, what):
+        for _ in range(30):
+            try:
+                found = find()
+            except (Changed, AXError):
+                found = None
+            if found is not None:
+                return found
+            time.sleep(0.1)
+        raise SidebarError(f'{what} did not appear. Check Cursor; nothing was sent.')
+
+    def close_menu(self):
+        for _ in range(3):  # A submenu closes first, then the menu.
+            if self.project_menu() is None:
+                return
+            self.keys('escape')
+            time.sleep(0.3)
+
+    def choose_project(self, project):
+        picker = self.read(self.project_picker)
+        if clean(label(picker)).casefold() == project.casefold():
+            return clean(label(picker))
+        picker.press()
+        menu = self.wait_for(self.project_menu, 'The project menu')
+        wanted = project.casefold()
+        names = [title for title, _ in self.menu_items(menu)]
+        match = [n for title, n in self.menu_items(menu) if title.casefold() == wanted]
+        if not match:
+            # Not among Recents: every local folder is under "On This Mac", as a path.
+            local = [n for title, n in self.menu_items(menu) if title == 'On This Mac']
+            if len(local) == 1:
+                local[0].press()
+                submenu = self.wait_for(lambda: self.project_menu('On This Mac'), 'The On This Mac menu')
+                folders = self.menu_items(submenu)
+                match = [n for title, n in folders if title.rsplit('/', 1)[-1].casefold() == wanted]
+                names = [title.rsplit('/', 1)[-1] for title, _ in folders if '/' in title]
+        if len(match) != 1:
+            self.close_menu()
+            raise SidebarError(f'Project {project!r} is not offered for a new chat ({len(match)} matches). '
+                               'Offered: ' + ', '.join(names) + '. The new chat is open, without a message.')
+        match[0].press()
+        for _ in range(30):
+            time.sleep(0.1)
+            try:
+                current = clean(label(self.project_picker()))
+            except (Changed, AXError, TypeError):
+                continue
+            if current.casefold() == wanted:
+                return current
+        raise SidebarError(f'Chose {project!r}, but the new chat does not show it as its project. '
+                           'Check Cursor before sending.')
+
+    def new_chat(self, project):
+        if self.read(self.mode) == 'ide':
+            return self.new_ide_chat(project)
+        buttons = self.read(lambda: [n for n, role, _ in self.walk(self.sidebar(), self.LIMIT)
+                                     if role == 'AXButton' and clean(label(n)).split(' ⌘')[0] == 'New Chat'])
+        self.unique(buttons, 'New Chat button').press()
+
+        def fresh():
+            # The new chat shows its project picker and an empty composer.
+            picker = self.project_picker()
+            return picker if picker is not None and self.is_empty(self.composer(self.main_window())) else None
+        picker = self.wait_for(fresh, 'A new chat with an empty composer')
+        name = self.choose_project(project) if project else clean(label(picker))
+        return f'New chat opened in {name}.'
+
+    def new_ide_chat(self, project):
+        """A "New Agent" tab in the project's workspace window (or the main window)."""
+        if project:
+            open_names = [self.workspace(w) for w in self.read(self.ide_windows)]
+            if project.casefold() not in {name.casefold() for name in open_names}:
+                raise SidebarError(f'No open Cursor workspace window for {project!r} (open: '
+                                   + ', '.join(open_names) + '). In the IDE view a new chat needs that window; '
+                                   'the Agents view (mode agents) can start one in any local project.')
+        window = self.read(lambda: self.ide_window(project)) if project else self.main_window()
+        if self.main_window() != window:
+            self.raise_window(window)
+        buttons = self.read(lambda: [n for n, role, _ in self.walk(window, self.LIMIT) if role == 'AXButton'
+                                     and 'codicon-add-two' in classes(n)
+                                     and clean(label(n)).startswith('New Agent')])
+        before = len(self.read(lambda: self.chat_tabs(window)))
+        self.unique(buttons, 'New Agent button (show the agent panel in this window)').press()
+
+        def fresh():
+            # One more chat tab, the active one untitled, with an empty composer.
+            tabs = self.chat_tabs(window)
+            active = [title for title, tab in tabs if 'active' in classes(tab)]
+            return True if (len(tabs) > before and active == ['New Agent']
+                            and self.is_empty(self.composer(window))) else None
+        self.wait_for(fresh, 'A new agent tab with an empty composer')
+        return f'New agent chat opened in {self.workspace(window)} (IDE).'
 
     # Conversation and composer
 
@@ -539,6 +665,8 @@ class Cursor(Walker):
         if command == 'answer':
             letter, _, text = argument.partition(' ')
             return self.answer(letter, text)
+        if command == 'new':
+            return self.new_chat(project)
         return self.input(command, argument)
 
     def open_session(self, mode, query):
@@ -671,6 +799,8 @@ if (system attribute "CTL_KEY") is "paste" then
         error errText number errNum
     end try
     if oldClipboard is not missing value then set the clipboard to oldClipboard
+else if (system attribute "CTL_KEY") is "escape" then
+    tell application "System Events" to key code 53
 else
     tell application "System Events" to key code 36
 end if
@@ -686,7 +816,7 @@ end tell
 '''
 
 COMMANDS = ('mode', 'status', 'debug-mode', 'debug-sidebar', 'projects', 'project', 'sessions', 'session', 'answer',
-            'read', 'type', 'send', 'enter', 'return')
+            'new', 'read', 'type', 'send', 'enter', 'return')
 
 
 def usage():
@@ -696,6 +826,9 @@ def usage():
   projects                     Agents: sidebar repositories; IDE: open workspace windows
   sessions [--project NAME]    Agents: agent rows (expands repositories); IDE: open agent chat tabs
   project NAME                 Bring an IDE workspace window forward (switches to the IDE view)
+  new [--project NAME]         Open a new, empty chat; sends nothing. Agents: in that project if given
+                               (Recents or any local folder of that name). IDE: a New Agent tab in that
+                               project's open workspace window (default: the main window)
   session "title"              Open an agent session (exact title, else unique substring);
                                in the IDE view this also brings its window forward
   read                         Print the latest agent reply in the main window
@@ -717,7 +850,14 @@ def main(args=None):
         print(f'Unknown command: {command}', file=sys.stderr)
         return 2
     project, argument = '', ' '.join(rest)
-    if command == 'sessions':
+    if command == 'new':
+        if rest[:1] == ['--project'] and ' '.join(rest[1:]).strip():
+            project = ' '.join(rest[1:]).strip()
+        elif rest:
+            print('Use new or new --project NAME.', file=sys.stderr)
+            return 2
+        argument = ''
+    elif command == 'sessions':
         if rest[:1] == ['--recents']:
             print('Cursor has no Recents list; use sessions or sessions --project NAME.', file=sys.stderr)
             return 2

@@ -99,7 +99,10 @@ These were learned by breaking them; keep them unless you have evidence otherwis
 - ChatGPT/Codex: mode switch, `new [--project]`, native read and input, "Show more"
   paging for projects and project chats, settling of lazily loaded projects.
 - Cursor: Agents and IDE views, `project` to raise a workspace window, `answer` for
-  multiple-choice questions (returns `done` or the next question), error cards.
+  multiple-choice questions (returns `done` or the next question), error cards, `new
+  [--project]` (Agents: any local project via the chat's project menu; IDE: a New Agent
+  tab in an open workspace window; checked live 2026-09-27, nothing sent). IDE chat tabs
+  are listed by the title Cursor shows ("New Agent" when untitled), not an internal ID.
 - Live navigation tests for all three apps (passed 2026-09-24).
 
 **MCP server** (`multi-agent-mcp`)
@@ -134,6 +137,9 @@ These were learned by breaking them; keep them unless you have evidence otherwis
   or Claude; no PyTorch.
 - MCP tools bridged directly (progress for "Still waiting", learned names primed into
   Whisper and shared with the push-to-talk client); user muted during tool calls.
+- Read-backs say where a message goes (new chat and project, session, or the open chat);
+  arguments the tools would refuse are refused before the read-back, so nobody confirms
+  a send that cannot happen.
 - Code-enforced spoken confirmation; own FastAPI server on 127.0.0.1 with Host/Origin
   checks, one session at a time (a new connection replaces the old one).
 - Importable: `create_app` takes `open_tools(user)` and `authorize(request)` hooks,
@@ -162,6 +168,7 @@ These were learned by breaking them; keep them unless you have evidence otherwis
   Japanese names.
 - Claude navigation test on Claude 2.9939.2 (only `mode`, `projects`, `status`, `read`,
   session opening and sends were checked after the update).
+- Cursor: a message sent into a new chat (`ask_agent` with `new_chat`), in both views.
 - Cursor: `answer` with a free-text option, in the IDE view, and with several questions;
   a successful Cursor reply by voice (the Cursor account's API key was invalid).
 - Claude as the voice client's LLM provider (the Anthropic account had no credits).
@@ -170,8 +177,9 @@ These were learned by breaking them; keep them unless you have evidence otherwis
 - Whether automation works while the Mac's screen is locked.
 
 **Gaps**
-- `new_chat` exists only for ChatGPT/Codex; add it for Claude (Chat and Code) and Cursor
-  (Agents "New Chat", IDE "New Agent").
+- `new_chat` exists for ChatGPT/Codex and Cursor; add it for Claude (Chat and Code).
+- Cursor `new` in the IDE view needs the project's workspace window open; opening a
+  closed folder as a window is not supported (the Agents view can use any local folder).
 - Unfiltered `sessions` and `--recents` in ChatGPT/Codex list only rows already shown
   (Recents likely loads on scroll, not via a button).
 - ChatGPT titles can contain HTML entities such as `&amp;`; decode them.

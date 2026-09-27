@@ -58,6 +58,7 @@ COMMAND_TIMEOUT = 150
 DEFAULT_TOKEN_FILE = Path.home() / '.config' / 'agent-mcp' / 'token'
 
 App = Literal['claude', 'chatgpt', 'cursor']
+NEW_CHAT_APPS = ('chatgpt', 'cursor')  # Apps whose CLI backend has `new [--project NAME]`.
 if set(APPS) != set(App.__args__):
     raise SystemExit(f'agent_ctl.py offers apps {APPS}; update App in agent_mcp.py to match.')
 
@@ -426,13 +427,16 @@ async def open_session(app: App, title: str) -> Result:
 
 @mcp.tool(annotations=NAVIGATE)
 async def new_chat(app: App, project: str | None = None) -> Result:
-    """Open a new, empty conversation, optionally inside a project. ChatGPT/Codex only for now.
+    """Open a new, empty conversation, optionally inside a project. ChatGPT/Codex and Cursor.
 
-    Uses the current view (ChatGPT or Codex); the project must be visible in the sidebar
-    (names as in list_projects). Nothing is sent: follow with send_message, or use ask_agent
-    with new_chat=true to open, send and wait in one call.
+    Both use the current view. ChatGPT/Codex: the project must be visible in its sidebar.
+    Cursor Agents view: any project Cursor offers (its recent ones and every local folder of
+    that name). Cursor IDE view: a New Agent tab in that project's open workspace window
+    (default: the front window). Names as in list_projects.
+    Nothing is sent: follow with send_message, or use ask_agent with new_chat=true to open,
+    send and wait in one call.
     """
-    if app != 'chatgpt':
+    if app not in NEW_CHAT_APPS:
         raise ToolError(f'new_chat is not supported for {app} yet; open a new conversation in the app.')
     message = await run_cli(app, 'new', *(['--project', project] if project else []))
     _open_session.pop(app, None)
@@ -476,7 +480,7 @@ async def ask_agent(app: App, message: str, session: str | None = None, new_chat
 
     Where it goes: session opens that session first (title as in list_sessions; must be in
     the current view); new_chat=true starts a new conversation first, inside project if
-    given (ChatGPT/Codex only); otherwise the open conversation. Refuses like send_message when
+    given (ChatGPT/Codex and Cursor, as new_chat); otherwise the open conversation. Refuses like send_message when
     a draft exists or a Cursor question is pending. Returns like wait_for_reply; on "timeout"
     the message was sent, so call wait_for_reply again rather than resending.
     timeout_seconds is capped at 900.
@@ -486,7 +490,7 @@ async def ask_agent(app: App, message: str, session: str | None = None, new_chat
     if project and not new_chat:
         raise ToolError('project applies only with new_chat=true.')
     if new_chat:
-        if app != 'chatgpt':
+        if app not in NEW_CHAT_APPS:
             raise ToolError(f'new_chat is not supported for {app} yet.')
         await run_cli(app, 'new', *(['--project', project] if project else []))
         _open_session.pop(app, None)
