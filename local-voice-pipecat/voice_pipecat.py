@@ -96,7 +96,15 @@ tools returned, in its original script.
 
 # Speech services: cloud by default when their key is set, local otherwise.
 STT_KINDS, TTS_KINDS = ('deepgram', 'whisper'), ('cartesia', 'fish', 'kokoro')
-FISH_DEFAULT_VOICE = '933563129e564b19a115bedd57b7406a'  # "Sarah", a public English voice on Fish Audio
+# Fish Audio's own ("Fish Official") English voices suited to an assistant:
+# key -> (name, model ID, description).
+FISH_VOICES = {
+    'sarah': ('Sarah', '933563129e564b19a115bedd57b7406a', 'female, soft'),
+    'hannah': ('Hannah', '9a9cf47702da476aa4629e2506d4a857', 'female, conversational'),
+    'ethan': ('Ethan', '536d3a5e000945adb7038665781a4aca', 'male, calm'),
+    'adrian': ('Adrian', 'bf322df2096a46f18c579d0baa36f41d', 'male, deep'),
+}
+FISH_DEFAULT_VOICE = 'sarah'
 # Cartesia's recommended voices for voice agents (docs.cartesia.ai, Sonic 3.6):
 # key -> (name, voice ID, description).
 CARTESIA_VOICES = {
@@ -282,21 +290,25 @@ def make_stt(kind: str, names: Names):
     return make_whisper_stt(model or 'small.en', names.hotwords() or None)
 
 
+def named_voice(voice: str, voices: dict) -> str:
+    """A voice ID: from its name in voices, or given as an ID."""
+    return voices[voice.lower()][1] if voice.lower() in voices else voice
+
+
 def make_tts(kind: str):
     if kind == 'cartesia':
         from pipecat.services.cartesia.tts import CartesiaTTSService
-        voice = os.environ.get('VOICE_CARTESIA_VOICE') or CARTESIA_DEFAULT_VOICE
         return CartesiaTTSService(
             api_key=os.environ['CARTESIA_API_KEY'],
             settings=CartesiaTTSService.Settings(
-                voice=CARTESIA_VOICES[voice.lower()][1] if voice.lower() in CARTESIA_VOICES else voice,
+                voice=named_voice(os.environ.get('VOICE_CARTESIA_VOICE') or CARTESIA_DEFAULT_VOICE, CARTESIA_VOICES),
                 **({'model': os.environ['VOICE_CARTESIA_MODEL']} if os.environ.get('VOICE_CARTESIA_MODEL') else {})))
     if kind == 'fish':
         from pipecat.services.fish.tts import FishAudioTTSService
         return FishAudioTTSService(
             api_key=os.environ['FISH_API_KEY'],
             settings=FishAudioTTSService.Settings(
-                voice=os.environ.get('VOICE_FISH_VOICE') or FISH_DEFAULT_VOICE,
+                voice=named_voice(os.environ.get('VOICE_FISH_VOICE') or FISH_DEFAULT_VOICE, FISH_VOICES),
                 **({'model': os.environ['VOICE_FISH_MODEL']} if os.environ.get('VOICE_FISH_MODEL') else {})))
     from pipecat.services.kokoro.tts import KokoroTTSService
     return KokoroTTSService(settings=KokoroTTSService.Settings(

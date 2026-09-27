@@ -181,7 +181,7 @@ Set in `.env` (see `.env.example`):
 | `VOICE_CARTESIA_VOICE`, `VOICE_CARTESIA_MODEL` | `daniel`, `sonic-3.6` | Cartesia voice (`daniel`, `skylar`, `jacqueline`, `gemma`, `archie`, or a voice ID) and model |
 | `VOICE_STT_MODEL` | `nova-3-general` (Deepgram), `small.en` (Whisper) | Speech-to-text model |
 | `VOICE_STT_LANGUAGE` | `en` | Deepgram language: a code such as `ja`, or `multi` |
-| `VOICE_FISH_VOICE`, `VOICE_FISH_MODEL` | "Sarah" (`933563129e564b19a115bedd57b7406a`), `s2.1-pro` | Fish Audio voice (model ID from fish.audio) and model |
+| `VOICE_FISH_VOICE`, `VOICE_FISH_MODEL` | `sarah`, `s2.1-pro` | Fish Audio voice (`sarah`, `hannah`, `ethan`, `adrian`, or a model ID from fish.audio) and model |
 | `VOICE_VOCABULARY` | — | Comma-separated words speech recognition should always expect |
 | `VOICE_KOKORO_VOICE`, `VOICE_KOKORO_SPEED` | `af_heart`, 1.0 | Kokoro voice and speed |
 | `VOICE_PORT` | `7860` | Port for the page and WebRTC signaling (`--port`) |
