@@ -123,6 +123,9 @@ NOT_A_NAME = re.compile(r'(start )?new (chat|agent|task|session)\b.*|show( \d+)?
 
 # Longest tool call: ask_agent and wait_for_reply accept timeouts of up to 900 seconds.
 TOOL_TIMEOUT = 960
+# A session ends after this long without speech from either side ("Still waiting" during
+# long agent waits counts as speech).
+IDLE_MINUTES = 5
 
 
 def describe_submission(name: str, args: dict) -> str:
@@ -516,7 +519,8 @@ async def run_bot(transport, agent_tools: AgentTools, provider: str) -> None:
 
     Locally that is a browser's WebRTC connection (smallwebrtc_transport); a server can pass
     any other transport, such as a Daily room. The session ends when the client disconnects
-    (the transport's on_client_disconnected event) or agent_tools.runner is cancelled.
+    (the transport's on_client_disconnected event), after IDLE_MINUTES without speech (the
+    bot says so first), or when agent_tools.runner is cancelled.
     """
     from pipecat.audio.vad.silero import SileroVADAnalyzer
     from pipecat.frames.frames import TTSSpeakFrame
@@ -546,7 +550,8 @@ async def run_bot(transport, agent_tools: AgentTools, provider: str) -> None:
     watch = audio_watch()
     pipeline = Pipeline([transport.input(), watch, stt, user_aggregator, llm, tts, transport.output(),
                          assistant_aggregator])
-    worker = PipelineWorker(pipeline, params=PipelineParams(enable_metrics=True))
+    worker = PipelineWorker(pipeline, params=PipelineParams(enable_metrics=True),
+                            idle_timeout_secs=IDLE_MINUTES * 60, cancel_on_idle_timeout=False)
     runner = WorkerRunner(handle_sigint=False)
     agent_tools.worker, agent_tools.runner = worker, runner
     await runner.add_workers(worker)
@@ -563,6 +568,16 @@ async def run_bot(transport, agent_tools: AgentTools, provider: str) -> None:
     @worker.rtvi.event_handler('on_client_ready')
     async def on_client_ready(rtvi):
         await worker.queue_frames([TTSSpeakFrame('Ready.', append_to_context=False)])
+
+    @worker.event_handler('on_idle_timeout')
+    async def on_idle_timeout(worker):
+        # Pipecat would end the session silently; say why first.
+        log(f'No speech for {IDLE_MINUTES} minutes; ending the session.')
+        await worker.queue_frames([TTSSpeakFrame(
+            f'Nothing has been said for {IDLE_MINUTES} minutes, so I am ending this session.',
+            append_to_context=False)])
+        await asyncio.sleep(8)
+        await runner.cancel()
 
     @transport.event_handler('on_client_disconnected')
     async def on_client_disconnected(transport, client):

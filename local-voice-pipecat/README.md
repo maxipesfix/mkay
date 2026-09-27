@@ -144,6 +144,9 @@ app.
 
 ## Troubleshooting
 
+- **The session ended by itself:** after five minutes without speech (`IDLE_MINUTES`) the
+  bot says so and ends the session; Connect again. Long waits for an agent do not count,
+  since the bot says "Still waiting" during them.
 - **"Microphone blocked" on the page:** allow the microphone for `localhost` in the
   browser's site settings and reload.
 - **421 or 403 in the browser:** open the page as `http://localhost:PORT/` or
