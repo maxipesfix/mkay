@@ -189,7 +189,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             NSApp.activate(ignoringOtherApps: true)
             NSApp.orderFrontStandardAboutPanel(nil)
         })
-        menu.addItem(NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        // Through a closure, not NSApplication.terminate(_:): macOS 26 adds its own symbol to
+        // items with that standard action and indents the rest of their section, so About and
+        // Quit stood out from a menu without icons.
+        let quit = item("Quit") { NSApp.terminate(nil) }
+        quit.keyEquivalent = "q"
+        menu.addItem(quit)
     }
 
     private func showSetup() {
