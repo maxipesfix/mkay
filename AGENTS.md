@@ -15,6 +15,7 @@ by voice. Three layers, each using only the one below it:
 | `multi-agent-mcp/` | `agent_mcp.py`, an MCP server exposing the CLI as tools over stdio and bearer-token HTTP | `uv run --script` (deps pinned in `agent_mcp.py.lock`) |
 | `local-voice-ptt/` | `voice_ptt.py`, a push-to-talk voice client using the MCP server | `uv run --script` (deps pinned in `voice_ptt.py.lock`) |
 | `local-voice-pipecat/` | `voice_pipecat.py`, a hands-free Pipecat voice client used from a browser over WebRTC | `uv run --script` (deps pinned in `voice_pipecat.py.lock`) |
+| `macos-app/` | `m’kay.app`, a menu-bar app (disk image) running `connector.py` with a bundled Python | Swift (SwiftPM, Command Line Tools); `build.sh` |
 
 Each directory has a README with the full reference. Tested app versions are listed in
 `multi-agent-cli/README.md` (Claude 2.9939.2, ChatGPT 26.915.31945, Cursor 3.21.18).
@@ -32,6 +33,7 @@ multi-agent-mcp/test/test_mcp_server.py --app chatgpt --http   # MCP smoke test:
 local-voice-ptt/voice_ptt.py --text                          # voice client with typed input
 local-voice-ptt/voice_ptt.py --debug-keys                    # push-to-talk key and permission check
 local-voice-pipecat/voice_pipecat.py                         # then open http://localhost:7860/ and Connect
+macos-app/build.sh                                           # build/m’kay.app and build/m’kay-VERSION.dmg
 ```
 
 - There are no offline unit tests; tests drive the live apps and never send messages.
@@ -84,6 +86,13 @@ These were learned by breaking them; keep them unless you have evidence otherwis
 - **Voice client exit:** never stop the PortAudio input stream (it deadlocks CoreAudio
   against the Python callback); quit with `os._exit` after cleanup. `uv run` forwards
   Ctrl-C, so one press arrives twice: debounce it.
+- **Mac app bundle:** the app runs the public scripts unchanged with its own Python
+  (`connector.py --python`), so they must keep starting children with `sys.executable`,
+  never `python3` or a shebang (a fresh Mac has no usable `python3`). The signed bundle
+  is never written to: `build.sh` precompiles, the app sets `PYTHONDONTWRITEBYTECODE`.
+  Permissions follow the signature, so ad-hoc builds lose Accessibility on each rebuild.
+  Users see the name m’kay (app, disk image, prompts); the bundle ID `ai.mkay.mac`, the
+  executable and the app's folders keep `mkay` (renaming them would lose sign-ins).
 - **Match the surrounding code.** Standard library only in `multi-agent-cli`; keep
   diagnostics read-only; keep titles exactly as the app shows them (never deduplicate).
 
@@ -160,6 +169,16 @@ These were learned by breaking them; keep them unless you have evidence otherwis
   spoken use (status, listings, opening a session). The Whisper event-loop fix is
   proposed upstream as pipecat-ai/pipecat#5931.
 
+**Mac app** (`macos-app`)
+- `m’kay.app`: Swift menu-bar shell (SwiftPM, no Xcode) running `connector.py --events
+  --python` with a bundled standalone CPython 3.12 and the locked dependencies; setup
+  window (Accessibility, Automation of System Events, sign-in with the code shown), menu
+  with status, recent tool names, Read-Only, Pause, Start at Login, log, Sign Out;
+  restarts a crashed connector; token in Application Support (mode 600).
+- `build.sh`: app, icon, bundled Python, inside-out signing (Developer ID with hardened
+  runtime when present), disk image, optional notarization. Checked 2026-09-27: 17 tools
+  from the bundled Python, setup window, connector events; notarized and stapled.
+
 **ChatGPT reading**
 - `read` returns a document card's text ("Writing" replies keep it in an editor inside
   the reply; the reader used to stop there, taking it for the composer).
@@ -181,6 +200,8 @@ These were learned by breaking them; keep them unless you have evidence otherwis
 - ChatGPT: paging a collapsed Projects list (it was already expanded when tested).
 - MCP HTTP on a non-local address (Tailscale) and from a remote client.
 - Whether automation works while the Mac's screen is locked.
+- Mac app: sign-in and a voice session through it; the notarized disk image opened on
+  another Mac.
 
 **Gaps**
 - `new_chat` exists for ChatGPT/Codex and Cursor; add it for Claude (Chat and Code).
@@ -196,6 +217,8 @@ These were learned by breaking them; keep them unless you have evidence otherwis
 - MCP tool descriptions keep docstring indentation; clean them up.
 
 **Next steps (roadmap)**
+- Mac app: Sparkle updates (appcast on mkay.ai), Intel build, token in the Keychain,
+  "Move to Applications" when opened from the disk image.
 - `local-voice-pipecat` from a phone on your own network: `tailscale serve` for HTTPS,
   `--allowed-host` for its name, and a mobile-friendly page.
 - Pipecat client: limit conversation history (it grows for the whole session) and an

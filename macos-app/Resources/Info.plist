@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>ai.mkay.mac</string>
+	<key>CFBundleName</key>
+	<string>m’kay</string>
+	<key>CFBundleDisplayName</key>
+	<string>m’kay</string>
+	<key>CFBundleExecutable</key>
+	<string>mkay</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>13.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.productivity</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>m’kay presses keys (paste, Return) in Claude, ChatGPT and Cursor through System Events when you ask it to.</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>BSD 2-Clause License</string>
+</dict>
+</plist>

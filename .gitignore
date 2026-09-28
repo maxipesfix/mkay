@@ -24,3 +24,7 @@ venv/
 .idea/
 .vscode/
 *.swp
+
+# Mac app build output
+macos-app/build/
+macos-app/.build/
