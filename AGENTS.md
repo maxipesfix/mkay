@@ -147,6 +147,11 @@ These were learned by breaking them; keep them unless you have evidence otherwis
   so a server can give each user's session its own MCP connection (the local entry
   point serves one local user, as before). `run_bot(transport, ...)` takes any Pipecat
   transport (a server uses Daily rooms); `check_host_and_origin` is reusable.
+- `run_bot(..., echo_guard=True)` for phones on their speaker, whose echo cancellation
+  (WebKit on iPhone) lets the bot hear itself: turns start from Deepgram transcripts,
+  and while the bot speaks and 1 s after, three words are needed (shorter fragments are
+  dropped). Off by default; used by a server for phones, and it worked on an iPhone
+  (2026-09-27).
 - Cloud speech: Deepgram (keyterms from learned names, model-improvement opt-out) and
   Fish Audio when their keys are set, else local Whisper and Kokoro (`VOICE_STT`,
   `VOICE_TTS`); a cloud-speech session uses ~160 MB and ~10% of a core when idle.
