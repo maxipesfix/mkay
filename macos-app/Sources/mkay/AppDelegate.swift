@@ -146,7 +146,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             menu.addItem(item("⚠︎ Finish Setup…") { [weak self] in self?.showSetup() })
         }
         if connector.isLinked {
-            menu.addItem(item("Talk to Your Mac") { [connector] in Browser.open(connector.accountPage) })
+            menu.addItem(item("Open mkay.ai") { [connector] in Browser.open(connector.accountPage) })
         }
 
         menu.addItem(.separator())

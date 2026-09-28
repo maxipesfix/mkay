@@ -38,9 +38,9 @@ build.sh                 Builds build/m’kay.app and build/m’kay-VERSION.dmg
    and **Automation** of System Events (paste and Return), then **Sign in**: your
    browser opens your account's Link-a-Mac page with a code, and you link the Mac only
    if the page shows the same code as the window.
-3. The menu-bar icon (a waveform) shows the connection. Its menu has Talk to Your Mac
-   (the voice page), Recent Activity (tool names, newest first), Read-Only (Never Send),
-   Pause, Set Up…, Start at Login, Open Log, Sign Out, About and Quit. Following Apple's
+3. The menu-bar icon (a waveform) shows the connection. Its menu has Open mkay.ai
+   (the voice page, in your browser; the setup window has the same button), Recent
+   Activity (tool names, newest first), Read-Only (Never Send), Pause, Set Up…, Start at Login, Open Log, Sign Out, About and Quit. Following Apple's
    guidelines for menu-bar menus, items do not repeat the app's name, and only items that
    ask for more (Set Up…, Sign In…) end in an ellipsis.
 

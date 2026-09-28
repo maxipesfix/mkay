@@ -242,7 +242,9 @@ These were learned by breaking them; keep them unless you have evidence otherwis
   candidate: its 4-bit GGUF is 24.5 GB, so it needs a Mac with 32 GB or more, temperature
   0 and thinking off. No model small enough for 16 GB scores well in kwindla/aiewf-eval.
 - Mac app: Sparkle updates (appcast on mkay.ai), Intel build, token in the Keychain,
-  "Move to Applications" when opened from the disk image.
+  "Move to Applications" when opened from the disk image; optionally open a locally run
+  `local-voice-pipecat` page too (the menu's Open mkay.ai always opens the cloud page,
+  and the local client does not need the app).
 - `local-voice-pipecat` from a phone on your own network: `tailscale serve` for HTTPS,
   `--allowed-host` for its name, and a mobile-friendly page.
 - Pipecat client: limit conversation history (it grows for the whole session) and an

@@ -71,7 +71,7 @@ struct SetupView: View {
 
             HStack {
                 if connector.isLinked && !connector.isSigningIn {
-                    Button("Talk to Your Mac") { Browser.open(connector.accountPage) }
+                    Button("Open mkay.ai") { Browser.open(connector.accountPage) }
                 }
                 Spacer()
                 Button("Done") { NSApp.keyWindow?.close() }.keyboardShortcut(.defaultAction)
