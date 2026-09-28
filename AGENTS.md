@@ -169,8 +169,10 @@ These were learned by breaking them; keep them unless you have evidence otherwis
 - `run_bot(..., echo_guard=True)` for phones on their speaker, whose echo cancellation
   (WebKit on iPhone) lets the bot hear itself: turns start from Deepgram transcripts,
   and while the bot speaks and 1 s after, three words are needed (shorter fragments are
-  dropped). Off by default; used by a server for phones, and it worked on an iPhone
-  (2026-09-27).
+  dropped). Off by default; used by a server for phones. It worked on an iPhone
+  (2026-09-27), but echoes of three or more words still interrupted (2026-09-28), so a
+  transcript that mostly repeats, in order, what the bot said in the last 10 s is also
+  dropped while it speaks and 2 s after (`make_echo_guard`; checked offline).
 - Japanese names are said in romaji with Cartesia as with Kokoro: Cartesia's sonic-3.6
   silently skips hiragana in an English sentence (checked 2026-09-28 by transcribing its
   audio); tool arguments keep the exact title.

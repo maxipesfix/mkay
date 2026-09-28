@@ -678,52 +678,104 @@ def audio_watch(silence_seconds: float = 3.0):
     return AudioWatch()
 
 
-def echo_guard_start(min_words: int = 3, tail_seconds: float = 1.0):
-    """A user turn start strategy for devices whose echo cancellation lets the bot's voice through.
+def spoken_words(text: str) -> list[str]:
+    """Words of a transcript or a reply, for comparing them: lowercase, without punctuation;
+    text without spaces (Japanese) counts each character as a word."""
+    words = []
+    for word in re.findall(r'[^\W_]+', text.lower()):
+        words.extend([word] if word.isascii() else list(word))
+    return words
+
+
+def make_echo_guard(min_words: int = 3, tail_seconds: float = 1.0, echo_seconds: float = 2.0,
+               window_seconds: float = 10.0, match: float = 0.6):
+    """For devices whose echo cancellation lets the bot's voice through: a user turn start
+    strategy and a processor that records what the bot says (it goes after transport.output(),
+    which passes the bot's words on as they are spoken).
 
     Phones on their speaker (WebKit on iPhone) sometimes send the bot's own speech back as
-    user speech. Turns then start from transcripts instead of voice activity: while the bot
-    speaks, and for tail_seconds after it stops (its echo is still being transcribed), a
-    turn needs min_words words and shorter fragments are dropped; otherwise one word starts
-    it, as with Pipecat's MinWordsUserTurnStartStrategy. A short tail keeps a quick "Yes."
-    after a read-back. Needs a streaming STT (Deepgram): Whisper transcribes only after the
-    user has stopped speaking. One-word interruptions ("Stop.") no longer work while it speaks.
+    user speech. Turns then start from transcripts instead of voice activity, and a
+    transcript counts as echo and is dropped:
+    - if it is shorter than min_words while the bot speaks or for tail_seconds after (a
+      quick "Yes." after a read-back comes later than that), or
+    - if, while the bot speaks or for echo_seconds after, at least `match` of its words
+      repeat, in order, what the bot said in the last window_seconds (an echo has any
+      length; an interruption rarely repeats the bot).
+    Otherwise one word starts a turn, as with Pipecat's MinWordsUserTurnStartStrategy. Needs
+    a streaming STT (Deepgram): Whisper transcribes only after the user has stopped speaking.
+    One-word interruptions ("Stop.") no longer work while the bot speaks.
     """
+    from collections import deque
+    from difflib import SequenceMatcher
+
     from pipecat.frames.frames import (BotStartedSpeakingFrame, BotStoppedSpeakingFrame,
-                                       InterimTranscriptionFrame, TranscriptionFrame)
+                                       InterimTranscriptionFrame, TranscriptionFrame, TTSTextFrame)
+    from pipecat.processors.frame_processor import FrameProcessor
     from pipecat.turns.types import ProcessFrameResult
     from pipecat.turns.user_start.base_user_turn_start_strategy import BaseUserTurnStartStrategy
+
+    said_by_bot: deque[tuple[float, str]] = deque()  # (time.monotonic(), word)
+
+    def recent_bot_words() -> list[str]:
+        while said_by_bot and said_by_bot[0][0] < time.monotonic() - window_seconds:
+            said_by_bot.popleft()
+        return [word for _, word in said_by_bot]
+
+    class BotWords(FrameProcessor):
+        async def process_frame(self, frame, direction):
+            await super().process_frame(frame, direction)
+            if isinstance(frame, TTSTextFrame):
+                now = time.monotonic()
+                said_by_bot.extend((now, word) for word in spoken_words(frame.text))
+            await self.push_frame(frame, direction)
 
     class EchoGuardStart(BaseUserTurnStartStrategy):
         def __init__(self):
             super().__init__()
             self.bot_speaking = False
-            self.quiet_after = 0.0  # time.monotonic() when the bot's echo has died down
+            self.stopped_at = float('-inf')  # time.monotonic() when the bot last stopped speaking
+            self.in_turn = False  # the user's turn is under way: their words, left alone
 
         async def handle_user_turn_started(self):
-            # The user's turn interrupts the bot: the next words are the user's.
-            self.bot_speaking = False
-            self.quiet_after = 0.0
+            self.in_turn = True
+            self.bot_speaking = False  # The user's turn interrupts the bot.
+
+        async def handle_user_turn_stopped(self):
+            self.in_turn = False
+
+        def echo(self, text: str) -> str | None:
+            """Why the transcript is the bot's echo, or None."""
+            since = 0.0 if self.bot_speaking else time.monotonic() - self.stopped_at
+            when = 'while the bot spoke' if self.bot_speaking else f'{since:.1f}s after the bot stopped'
+            words = spoken_words(text)
+            if since < tail_seconds and len(text.split()) < min_words:
+                return f'as too short {when}'
+            if since < echo_seconds and len(words) >= 2:
+                blocks = SequenceMatcher(None, words, recent_bot_words(), autojunk=False).get_matching_blocks()
+                share = sum(block.size for block in blocks) / len(words)
+                if share >= match:
+                    return f"as the bot's own words ({share:.0%}) {when}"
+            return None
 
         async def process_frame(self, frame):
             if isinstance(frame, BotStartedSpeakingFrame):
                 self.bot_speaking = True
             elif isinstance(frame, BotStoppedSpeakingFrame):
                 self.bot_speaking = False
-                self.quiet_after = time.monotonic() + tail_seconds
-            elif isinstance(frame, (TranscriptionFrame, InterimTranscriptionFrame)):
-                guarded = self.bot_speaking or time.monotonic() < self.quiet_after
-                if len(frame.text.split()) >= (min_words if guarded else 1):
+                self.stopped_at = time.monotonic()
+            elif isinstance(frame, (TranscriptionFrame, InterimTranscriptionFrame)) and not self.in_turn:
+                if not frame.text.strip():
+                    return ProcessFrameResult.CONTINUE
+                reason = self.echo(frame.text)
+                if reason is None:
                     await self.trigger_user_turn_started()
                     return ProcessFrameResult.STOP
-                if isinstance(frame, TranscriptionFrame) and frame.text.strip():
-                    when = ('while the bot spoke' if self.bot_speaking else
-                            f'{time.monotonic() - self.quiet_after + tail_seconds:.1f}s after the bot stopped')
-                    log(f'Echo guard: dropped {said(frame.text)} {when}.')
+                if isinstance(frame, TranscriptionFrame):
+                    log(f'Echo guard: dropped {said(frame.text)} {reason}.')
                 await self.trigger_reset_aggregation()
             return ProcessFrameResult.CONTINUE
 
-    return EchoGuardStart()
+    return EchoGuardStart(), BotWords()
 
 
 def quiet_pipecat_audio_timeouts(record) -> bool:
@@ -787,7 +839,7 @@ async def run_bot(transport, agent_tools: AgentTools, provider: str, *, echo_gua
     any other transport, such as a Daily room. The session ends when the client disconnects
     (the transport's on_client_disconnected event), after IDLE_MINUTES without speech (the
     bot says so first), or when agent_tools.runner is cancelled. echo_guard keeps the bot
-    from taking its own echo for user speech (echo_guard_start); it needs Deepgram.
+    from taking its own echo for user speech (see make_echo_guard); it needs Deepgram.
 
     stt ('deepgram' or 'whisper'), voice ('engine:voice', such as 'kokoro:heart') and
     llm_choice ('openai', 'anthropic' or 'local:MODEL') choose this session's services, as
@@ -820,6 +872,7 @@ async def run_bot(transport, agent_tools: AgentTools, provider: str, *, echo_gua
         log(f'Session: {stt_kind} in, {tts_kind} {voice_key or "default voice"} out, {llm_choice or provider}.')
     agent_tools.register(llm)
 
+    guard_start, bot_words = make_echo_guard() if echo_guard else (None, None)
     context = LLMContext(tools=agent_tools.schemas())
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
@@ -828,11 +881,11 @@ async def run_bot(transport, agent_tools: AgentTools, provider: str, *, echo_gua
             # Tool calls drive the apps and cannot be taken back halfway: while one runs, the
             # user is muted, so speech cannot interrupt (and cancel) it.
             user_mute_strategies=[FunctionCallUserMuteStrategy()],
-            user_turn_strategies=UserTurnStrategies(start=[echo_guard_start()]) if echo_guard else None))
+            user_turn_strategies=UserTurnStrategies(start=[guard_start]) if echo_guard else None))
 
     watch = audio_watch()
     pipeline = Pipeline([transport.input(), watch, stt, user_aggregator, llm, tts, transport.output(),
-                         assistant_aggregator])
+                         *([bot_words] if echo_guard else []), assistant_aggregator])
     worker = PipelineWorker(pipeline, params=PipelineParams(enable_metrics=True),
                             idle_timeout_secs=IDLE_MINUTES * 60, cancel_on_idle_timeout=False)
     runner = WorkerRunner(handle_sigint=False)

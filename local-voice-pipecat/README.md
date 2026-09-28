@@ -165,7 +165,9 @@ out (such as a Daily room; `smallwebrtc_transport(connection)` is the local one)
 `check_host_and_origin(app, allowed_hosts)` adds the Host and Origin checks to a FastAPI
 app. `run_bot(..., echo_guard=True)` is for phones on their speaker, whose echo
 cancellation sometimes lets the bot hear itself: while the bot speaks and for 1 s
-after, only three or more transcribed words start a turn (it needs Deepgram).
+after, only three or more transcribed words start a turn, and while it speaks and for
+2 s after, a transcript that mostly repeats the bot's last words is dropped as echo
+(it needs Deepgram).
 
 ## Changing the page
 
