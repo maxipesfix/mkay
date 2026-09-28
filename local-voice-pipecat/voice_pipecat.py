@@ -570,6 +570,54 @@ def audio_watch(silence_seconds: float = 3.0):
     return AudioWatch()
 
 
+def echo_guard_start(min_words: int = 3, tail_seconds: float = 1.0):
+    """A user turn start strategy for devices whose echo cancellation lets the bot's voice through.
+
+    Phones on their speaker (WebKit on iPhone) sometimes send the bot's own speech back as
+    user speech. Turns then start from transcripts instead of voice activity: while the bot
+    speaks, and for tail_seconds after it stops (its echo is still being transcribed), a
+    turn needs min_words words and shorter fragments are dropped; otherwise one word starts
+    it, as with Pipecat's MinWordsUserTurnStartStrategy. A short tail keeps a quick "Yes."
+    after a read-back. Needs a streaming STT (Deepgram): Whisper transcribes only after the
+    user has stopped speaking. One-word interruptions ("Stop.") no longer work while it speaks.
+    """
+    from pipecat.frames.frames import (BotStartedSpeakingFrame, BotStoppedSpeakingFrame,
+                                       InterimTranscriptionFrame, TranscriptionFrame)
+    from pipecat.turns.types import ProcessFrameResult
+    from pipecat.turns.user_start.base_user_turn_start_strategy import BaseUserTurnStartStrategy
+
+    class EchoGuardStart(BaseUserTurnStartStrategy):
+        def __init__(self):
+            super().__init__()
+            self.bot_speaking = False
+            self.quiet_after = 0.0  # time.monotonic() when the bot's echo has died down
+
+        async def handle_user_turn_started(self):
+            # The user's turn interrupts the bot: the next words are the user's.
+            self.bot_speaking = False
+            self.quiet_after = 0.0
+
+        async def process_frame(self, frame):
+            if isinstance(frame, BotStartedSpeakingFrame):
+                self.bot_speaking = True
+            elif isinstance(frame, BotStoppedSpeakingFrame):
+                self.bot_speaking = False
+                self.quiet_after = time.monotonic() + tail_seconds
+            elif isinstance(frame, (TranscriptionFrame, InterimTranscriptionFrame)):
+                guarded = self.bot_speaking or time.monotonic() < self.quiet_after
+                if len(frame.text.split()) >= (min_words if guarded else 1):
+                    await self.trigger_user_turn_started()
+                    return ProcessFrameResult.STOP
+                if isinstance(frame, TranscriptionFrame) and frame.text.strip():
+                    when = ('while the bot spoke' if self.bot_speaking else
+                            f'{time.monotonic() - self.quiet_after + tail_seconds:.1f}s after the bot stopped')
+                    log(f'Echo guard: dropped {said(frame.text)} {when}.')
+                await self.trigger_reset_aggregation()
+            return ProcessFrameResult.CONTINUE
+
+    return EchoGuardStart()
+
+
 def quiet_pipecat_audio_timeouts(record) -> bool:
     """Loguru filter: audio_watch reports input gaps once instead of every 2 seconds."""
     return 'No audio frame received within the specified time' not in record['message']
@@ -612,13 +660,14 @@ def smallwebrtc_transport(connection):
         webrtc_connection=connection, params=TransportParams(audio_in_enabled=True, audio_out_enabled=True))
 
 
-async def run_bot(transport, agent_tools: AgentTools, provider: str) -> None:
+async def run_bot(transport, agent_tools: AgentTools, provider: str, *, echo_guard: bool = False) -> None:
     """One voice session over a Pipecat transport with audio in and out.
 
     Locally that is a browser's WebRTC connection (smallwebrtc_transport); a server can pass
     any other transport, such as a Daily room. The session ends when the client disconnects
     (the transport's on_client_disconnected event), after IDLE_MINUTES without speech (the
-    bot says so first), or when agent_tools.runner is cancelled.
+    bot says so first), or when agent_tools.runner is cancelled. echo_guard keeps the bot
+    from taking its own echo for user speech (echo_guard_start); it needs Deepgram.
     """
     from pipecat.audio.vad.silero import SileroVADAnalyzer
     from pipecat.frames.frames import TTSSpeakFrame
@@ -628,9 +677,13 @@ async def run_bot(transport, agent_tools: AgentTools, provider: str) -> None:
     from pipecat.processors.aggregators.llm_response_universal import (LLMContextAggregatorPair,
                                                                        LLMUserAggregatorParams)
     from pipecat.turns.user_mute.function_call_user_mute_strategy import FunctionCallUserMuteStrategy
+    from pipecat.turns.user_turn_strategies import UserTurnStrategies
     from pipecat.workers.runner import WorkerRunner
 
     stt_kind, tts_kind = speech_services()
+    if echo_guard and stt_kind != 'deepgram':
+        log('The echo guard needs Deepgram (DEEPGRAM_API_KEY); running without it.')
+        echo_guard = False
     stt = make_stt(stt_kind, agent_tools.names)
     tts = make_tts(tts_kind)
     llm = make_llm(provider, SYSTEM_PROMPT + (ENGLISH_ONLY_SPEECH if tts_kind == 'kokoro' else ''))
@@ -643,7 +696,8 @@ async def run_bot(transport, agent_tools: AgentTools, provider: str) -> None:
             vad_analyzer=SileroVADAnalyzer(),
             # Tool calls drive the apps and cannot be taken back halfway: while one runs, the
             # user is muted, so speech cannot interrupt (and cancel) it.
-            user_mute_strategies=[FunctionCallUserMuteStrategy()]))
+            user_mute_strategies=[FunctionCallUserMuteStrategy()],
+            user_turn_strategies=UserTurnStrategies(start=[echo_guard_start()]) if echo_guard else None))
 
     watch = audio_watch()
     pipeline = Pipeline([transport.input(), watch, stt, user_aggregator, llm, tts, transport.output(),

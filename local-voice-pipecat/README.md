@@ -140,7 +140,9 @@ A server with its own signaling can use the pieces directly: `run_bot(transport,
 agent_tools, provider)` runs one session over any Pipecat transport with audio in and
 out (such as a Daily room; `smallwebrtc_transport(connection)` is the local one), and
 `check_host_and_origin(app, allowed_hosts)` adds the Host and Origin checks to a FastAPI
-app.
+app. `run_bot(..., echo_guard=True)` is for phones on their speaker, whose echo
+cancellation sometimes lets the bot hear itself: while the bot speaks and for 1 s
+after, only three or more transcribed words start a turn (it needs Deepgram).
 
 ## Troubleshooting
 
