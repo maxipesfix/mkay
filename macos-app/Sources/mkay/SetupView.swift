@@ -4,7 +4,12 @@ import SwiftUI
 /// whenever something is missing; the menu's "Set Up…" opens it again.
 struct SetupView: View {
     @ObservedObject var connector: Connector
-    @StateObject private var checks = Checks()
+    @StateObject private var checks: Checks
+
+    init(connector: Connector, iconHidden: @escaping @MainActor () -> Bool) {
+        self.connector = connector
+        _checks = StateObject(wrappedValue: Checks(iconHidden: iconHidden))
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -17,6 +22,13 @@ struct SetupView: View {
 
             if !Permissions.runsFromApplications {
                 Label("Drag m’kay to your Applications folder and open it from there first; permissions given to the copy on the disk image are lost.",
+                      systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if checks.iconHidden {
+                Label("Your menu bar is full, so the m’kay icon is hidden behind the camera. Switch off icons you don’t need in System Settings → Menu Bar, or quit a menu-bar app; then hold ⌘ and drag the m’kay icon toward the clock. m’kay keeps working meanwhile; open it again to see this window.",
                       systemImage: "exclamationmark.triangle.fill")
                     .foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
@@ -59,7 +71,7 @@ struct SetupView: View {
 
             HStack {
                 if connector.isLinked && !connector.isSigningIn {
-                    Button("Talk to Your Mac…") { Browser.open(connector.accountPage) }
+                    Button("Talk to Your Mac") { Browser.open(connector.accountPage) }
                 }
                 Spacer()
                 Button("Done") { NSApp.keyWindow?.close() }.keyboardShortcut(.defaultAction)
@@ -111,15 +123,20 @@ private struct Step<Controls: View>: View {
     }
 }
 
-/// Permission state, polled while the window is open: macOS sends no notice when it changes.
+/// Permission state and the menu-bar icon's visibility, polled while the window is open:
+/// macOS sends no notice when they change.
 @MainActor
 private final class Checks: ObservableObject {
     @Published var accessibility = Permissions.accessibility
     @Published var automation = Permissions.automation(ask: false)
     @Published var loginItem = LoginItem.enabled
+    @Published var iconHidden: Bool
+    private let isIconHidden: @MainActor () -> Bool
     private var timer: Timer?
 
-    init() {
+    init(iconHidden: @escaping @MainActor () -> Bool) {
+        isIconHidden = iconHidden
+        self.iconHidden = iconHidden()
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
         }
@@ -132,5 +149,6 @@ private final class Checks: ObservableObject {
         let current = Permissions.automation(ask: false)
         if current != .unknown { automation = current }
         loginItem = LoginItem.enabled
+        iconHidden = isIconHidden()
     }
 }

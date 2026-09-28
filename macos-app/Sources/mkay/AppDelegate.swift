@@ -31,6 +31,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         updateIcon()
         connector.startIfLinked()
         if setupNeeded { showSetup() }
+        // macOS places the icon after launch; if it ended up hidden, the window is the only
+        // way to reach the app, and says how to bring the icon back.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            guard let self, self.iconHidden() else { return }
+            Log.write("The menu-bar icon is hidden (the menu bar is full).")
+            self.showSetup()
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -70,6 +77,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     // MARK: - Status item
+
+    /// Whether the menu-bar icon cannot be seen. When the menu bar is full, macOS places new
+    /// icons under a MacBook's camera notch and hides them; the setup window then says so.
+    private func iconHidden() -> Bool {
+        guard let window = statusItem?.button?.window, window.occlusionState.contains(.visible) else { return true }
+        guard let screen = window.screen ?? NSScreen.main,
+              let left = screen.auxiliaryTopLeftArea, let right = screen.auxiliaryTopRightArea else { return false }
+        let notch = NSRect(x: left.maxX, y: left.minY, width: right.minX - left.maxX, height: left.height)
+        return window.frame.intersects(notch)
+    }
 
     private func updateIcon() {
         let connected: Bool
@@ -117,7 +134,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
-        menu.addItem(disabled("m’kay: " + statusText))
+        menu.addItem(disabled(statusText))
         if let problem = connector.problem, !connector.isSigningIn {
             menu.addItem(disabled(problem))
         }
@@ -129,7 +146,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             menu.addItem(item("⚠︎ Finish Setup…") { [weak self] in self?.showSetup() })
         }
         if connector.isLinked {
-            menu.addItem(item("Talk to Your Mac…") { [connector] in Browser.open(connector.accountPage) })
+            menu.addItem(item("Talk to Your Mac") { [connector] in Browser.open(connector.accountPage) })
         }
 
         menu.addItem(.separator())
@@ -168,16 +185,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         menu.addItem(.separator())
-        menu.addItem(item("About m’kay") {
+        menu.addItem(item("About") {
             NSApp.activate(ignoringOtherApps: true)
             NSApp.orderFrontStandardAboutPanel(nil)
         })
-        menu.addItem(NSMenuItem(title: "Quit m’kay", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        menu.addItem(NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
     }
 
     private func showSetup() {
         if setupWindow == nil {
-            let window = NSWindow(contentViewController: NSHostingController(rootView: SetupView(connector: connector)))
+            let view = SetupView(connector: connector, iconHidden: { [weak self] in self?.iconHidden() ?? false })
+            let window = NSWindow(contentViewController: NSHostingController(rootView: view))
             window.title = "m’kay"
             window.styleMask = [.titled, .closable]
             window.isReleasedWhenClosed = false

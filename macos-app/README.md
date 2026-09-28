@@ -40,7 +40,9 @@ build.sh                 Builds build/m’kay.app and build/m’kay-VERSION.dmg
    if the page shows the same code as the window.
 3. The menu-bar icon (a waveform) shows the connection. Its menu has Talk to Your Mac
    (the voice page), Recent Activity (tool names, newest first), Read-Only (Never Send),
-   Pause, Set Up…, Start at Login, Open Log, Sign Out and Quit.
+   Pause, Set Up…, Start at Login, Open Log, Sign Out, About and Quit. Following Apple's
+   guidelines for menu-bar menus, items do not repeat the app's name, and only items that
+   ask for more (Set Up…, Sign In…) end in an ellipsis.
 
 - The device token is kept in `~/Library/Application Support/mkay/connector-token`
   (mode 600), separate from a connector run in a terminal (`~/.config/agent-mcp`).
