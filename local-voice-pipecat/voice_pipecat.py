@@ -91,7 +91,10 @@ Transcriptions can contain recognition errors in names: match them to the titles
 list_sessions or list_projects return rather than guessing, and ask when unsure.
 """
 
-# Added to the system prompt when the speech engine is Kokoro, which pronounces English only.
+# Added to the system prompt for engines that speak our English voices only: Kokoro, and
+# Cartesia, whose sonic-3.6 (Pipecat 1.12's default) silently skips hiragana in English
+# ("The first one is そばとも" came out as "The first one is"). Fish reads it as written.
+ENGLISH_ONLY_ENGINES = ('kokoro', 'cartesia')
 ENGLISH_ONLY_SPEECH = """
 Your speech engine can only pronounce English. Write every name or phrase in Japanese or
 another non-Latin script in Latin letters when you speak it: Japanese in Hepburn romaji
@@ -729,7 +732,7 @@ async def run_bot(transport, agent_tools: AgentTools, provider: str, *, echo_gua
         echo_guard = False
     stt = make_stt(stt_kind, agent_tools.names)
     tts = make_tts(tts_kind)
-    llm = make_llm(provider, SYSTEM_PROMPT + (ENGLISH_ONLY_SPEECH if tts_kind == 'kokoro' else ''))
+    llm = make_llm(provider, SYSTEM_PROMPT + (ENGLISH_ONLY_SPEECH if tts_kind in ENGLISH_ONLY_ENGINES else ''))
     agent_tools.register(llm)
 
     context = LLMContext(tools=agent_tools.schemas())

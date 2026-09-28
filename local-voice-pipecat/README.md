@@ -158,9 +158,10 @@ after, only three or more transcribed words start a turn (it needs Deepgram).
   server itself was stalled rather than the browser. Otherwise the page stopped sending:
   microphone muted on the page, input device changed, or the tab suspended. Click
   Disconnect and Connect.
-- **Japanese names:** with Kokoro, which speaks English only, the model is told to say
-  names in non-Latin scripts in romaji (そばとも as "Sobatomo"); tool arguments keep the
-  exact title. Fish reads them as written. For Japanese speech recognition, set
+- **Japanese names:** with Kokoro and Cartesia, the model is told to say names in
+  non-Latin scripts in romaji (そばとも as "Sobatomo"); tool arguments keep the exact
+  title. Kokoro speaks English only, and Cartesia's sonic-3.6 silently skips hiragana in
+  an English sentence. Fish reads them as written. For Japanese speech recognition, set
   `VOICE_STT_LANGUAGE=ja` or `multi`.
 - **The bot does not answer:** the terminal shows the error; an invalid API key shows
   as `HTTP 401` from the LLM service, and the session stops.

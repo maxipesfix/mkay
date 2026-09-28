@@ -166,6 +166,9 @@ These were learned by breaking them; keep them unless you have evidence otherwis
   and while the bot speaks and 1 s after, three words are needed (shorter fragments are
   dropped). Off by default; used by a server for phones, and it worked on an iPhone
   (2026-09-27).
+- Japanese names are said in romaji with Cartesia as with Kokoro: Cartesia's sonic-3.6
+  silently skips hiragana in an English sentence (checked 2026-09-28 by transcribing its
+  audio); tool arguments keep the exact title.
 - Cloud speech: Deepgram (keyterms from learned names, model-improvement opt-out) and
   Fish Audio when their keys are set, else local Whisper and Kokoro (`VOICE_STT`,
   `VOICE_TTS`); a cloud-speech session uses ~160 MB and ~10% of a core when idle.
@@ -179,7 +182,9 @@ These were learned by breaking them; keep them unless you have evidence otherwis
   --python` with a bundled standalone CPython 3.12 and the locked dependencies; setup
   window (Accessibility, Automation of System Events, sign-in with the code shown), menu
   with status, recent tool names, Read-Only, Pause, Start at Login, log, Sign Out;
-  restarts a crashed connector; token in Application Support (mode 600).
+  restarts a crashed connector; token in Application Support (mode 600). When a full
+  menu bar puts the icon under the camera notch, the setup window opens and says how to
+  bring it back.
 - `build.sh`: app, icon, bundled Python, inside-out signing (Developer ID with hardened
   runtime when present), disk image, optional notarization. Checked 2026-09-27: 17 tools
   from the bundled Python, setup window, connector events; notarized and stapled.
