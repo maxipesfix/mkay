@@ -195,6 +195,8 @@ These were learned by breaking them; keep them unless you have evidence otherwis
 - `build.sh`: app, icon, bundled Python, inside-out signing (Developer ID with hardened
   runtime when present), disk image, optional notarization. Checked 2026-09-27: 17 tools
   from the bundled Python, setup window, connector events; notarized and stapled.
+- Published as GitHub release v0.1.0 (`mkay.dmg`, 2026-09-28); the landing page's
+  Download for Mac links to `releases/latest/download/mkay.dmg`.
 
 **ChatGPT reading**
 - `read` returns a document card's text ("Writing" replies keep it in an editor inside

@@ -5,6 +5,9 @@
 Cursor apps on it from a phone or any browser. It is the easy install: one disk image,
 no terminal, no uv, no Python to set up.
 
+Download: [mkay.dmg](https://github.com/maxipesfix/mkay/releases/latest/download/mkay.dmg)
+(Apple Silicon, macOS 13 or later), from this repository's GitHub releases.
+
 The app is a small Swift shell around the public code, unchanged: it runs
 `multi-agent-mcp/connector.py` with a bundled standalone Python, and the connector runs
 `agent_mcp.py` and the CLI as before. Accessibility and Automation are granted to the
@@ -86,6 +89,15 @@ Developer ID the binaries get the hardened runtime and a timestamp; set
 ```bash
 xcrun notarytool store-credentials mkay-notary --apple-id YOU@EXAMPLE.COM --team-id TEAMID
 MKAY_NOTARY_PROFILE=mkay-notary macos-app/build.sh
+```
+
+To publish, attach the notarized disk image to a GitHub release as `mkay.dmg`: the
+landing page links to `releases/latest/download/mkay.dmg`, so the name must not change.
+
+```bash
+git tag vVERSION && git push origin vVERSION
+cp "macos-app/build/m’kay-VERSION.dmg" mkay.dmg
+gh release create vVERSION "mkay.dmg#m’kay VERSION for Mac (Apple Silicon)" --verify-tag --title "m’kay VERSION"
 ```
 
 Permissions are tied to the app's signature: an ad-hoc build loses Accessibility on every
