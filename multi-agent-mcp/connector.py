@@ -23,6 +23,9 @@ Your account password never reaches the connector.
 
 Token: AGENT_CONNECTOR_TOKEN, or the file given by --token-file
 (default ~/.config/agent-mcp/connector-token).
+
+For the Mac app: --python runs agent_mcp.py with that Python (its dependencies installed)
+instead of `uv run --script`, and --events prints one JSON object per line instead of text.
 """
 from __future__ import annotations
 
@@ -44,15 +47,20 @@ from urllib.parse import urlparse
 HERE = Path(__file__).resolve().parent
 TOKEN_FILE = Path.home() / '.config' / 'agent-mcp' / 'connector-token'
 LOCAL_HOSTS = {'localhost', '127.0.0.1', '::1'}
-# Close codes the server uses: the token is refused or this Mac was unlinked (stop), or the
-# session ended (reconnect now).
-TOKEN_REFUSED, SESSION_ENDED, UNLINKED = 4001, 4000, 4003
+# Close codes the server uses: the token is refused, this Mac was unlinked, or a newer
+# connector of the same account took over (stop), or the session ended (reconnect now).
+TOKEN_REFUSED, SESSION_ENDED, REPLACED, UNLINKED = 4001, 4000, 4002, 4003
 BACKOFF = (1, 2, 5, 10, 30)
 STABLE_SECONDS = 30
+EVENTS = False  # --events: JSON lines for the Mac app instead of text
 
 
-def log(message: str) -> None:
-    print(f'[{time.strftime("%H:%M:%S")}] {message}', flush=True)
+def log(message: str, event: str = 'log', **fields) -> None:
+    """Print a line for people, or with --events a JSON object: event, message and fields."""
+    if EVENTS:
+        print(json.dumps({'event': event, 'message': message, **fields}, ensure_ascii=False), flush=True)
+    else:
+        print(f'[{time.strftime("%H:%M:%S")}] {message}', flush=True)
 
 
 class ReadOnlyGuard:
@@ -99,12 +107,15 @@ async def relay(websocket, command: list[str], guard: ReadOnlyGuard, debug: bool
                 continue
             refusal = guard.refusal(message)
             if refusal:
-                log(f'Refused {message["params"].get("name")} (read-only).')
+                name = message['params'].get('name')
+                log(f'Refused {name} (read-only).', 'tool', name=name, refused=True)
                 await websocket.send(json.dumps(refusal))
                 continue
             if message.get('method') == 'tools/call':
                 params = message.get('params') or {}
-                log(f'🛠  {params.get("name")} {json.dumps(params.get("arguments") or {}, ensure_ascii=False)}')
+                arguments = params.get('arguments') or {}
+                log(f'🛠  {params.get("name")} {json.dumps(arguments, ensure_ascii=False)}', 'tool',
+                    name=params.get('name'), arguments=arguments, refused=False)
             # Compact JSON has no raw newlines, so it is exactly one stdio line.
             process.stdin.write(json.dumps(message, ensure_ascii=False).encode() + b'\n')
             await process.stdin.drain()
@@ -156,15 +167,19 @@ def login(server: str, token_file: Path, open_browser: bool) -> str:
     """Link this Mac to an account on the server; save and return its connector URL."""
     parsed = urlparse(server.rstrip('/'))
     if parsed.scheme != 'https' and not (parsed.scheme == 'http' and parsed.hostname in LOCAL_HOSTS):
-        raise SystemExit('--login needs an https:// address (http:// only to this Mac, for testing).')
+        fail('--login needs an https:// address (http:// only to this Mac, for testing).', 'usage')
     base = f'{parsed.scheme}://{parsed.netloc}'
     try:
         pairing = post_json(f'{base}/pair/start', {'name': computer_name()})
     except (OSError, ValueError) as error:
-        raise SystemExit(f'Cannot reach {parsed.netloc}: {error}')
-    print(f'\n  Your code: {pairing["user_code"]}\n', flush=True)
-    print(f'Sign in at {pairing["verification_uri"]}')
-    print('and link this Mac only if the page shows the same code.', flush=True)
+        fail(f'Cannot reach {parsed.netloc}: {error}', 'unreachable')
+    if EVENTS:
+        log(f'Your code: {pairing["user_code"]}', 'code', user_code=pairing['user_code'],
+            verification_uri=pairing['verification_uri'])
+    else:
+        print(f'\n  Your code: {pairing["user_code"]}\n', flush=True)
+        print(f'Sign in at {pairing["verification_uri"]}')
+        print('and link this Mac only if the page shows the same code.', flush=True)
     if open_browser:
         webbrowser.open(pairing['verification_uri'])
     deadline = time.monotonic() + pairing.get('expires_in', 600)
@@ -178,17 +193,25 @@ def login(server: str, token_file: Path, open_browser: bool) -> str:
         if result.get('status') == 'approved':
             break
         if result.get('status') == 'expired':
-            raise SystemExit('The code expired or was used. Run --login again.')
+            fail('The code expired or was used. Run --login again.', 'expired')
     else:
-        raise SystemExit('The code expired. Run --login again.')
+        fail('The code expired. Run --login again.', 'expired')
     url = f'{"wss" if parsed.scheme == "https" else "ws"}://{parsed.netloc}/connector'
     token_file.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     for path, text in ((token_file, result['token']), (url_file(token_file), url)):
         path.touch(mode=0o600)
         path.chmod(0o600)
         path.write_text(text + '\n')
-    log(f'This Mac is linked. Token saved to {token_file}.')
+    log(f'This Mac is linked. Token saved to {token_file}.', 'linked')
     return url
+
+
+def fail(message: str, reason: str):
+    """Stop with a message (stderr), or with --events a 'stopped' event and exit status 1."""
+    if EVENTS:
+        log(message, 'stopped', reason=reason)
+        raise SystemExit(1)
+    raise SystemExit(message)
 
 
 async def run(url: str, token: str, command: list[str], read_only: bool, debug: bool) -> int:
@@ -198,7 +221,8 @@ async def run(url: str, token: str, command: list[str], read_only: bool, debug: 
         try:
             async with websockets.connect(url, additional_headers={'Authorization': f'Bearer {token}'},
                                           max_size=16 * 1024 * 1024, ping_interval=20) as websocket:
-                log(f'Connected to {urlparse(url).netloc}' + (' (read-only)' if read_only else '') + '.')
+                log(f'Connected to {urlparse(url).netloc}' + (' (read-only)' if read_only else '') + '.',
+                    'connected', server=urlparse(url).netloc, read_only=read_only)
                 connected = time.monotonic()
                 await relay(websocket, command, ReadOnlyGuard(read_only), debug)
                 code = websocket.close_code
@@ -207,23 +231,31 @@ async def run(url: str, token: str, command: list[str], read_only: bool, debug: 
         except websockets.InvalidStatus as error:
             code = error.response.status_code
             if code in (401, 403):
-                log('The server refused this device token. Run with --login to link this Mac again.')
+                log('The server refused this device token. Run with --login to link this Mac again.',
+                    'stopped', reason='token_refused')
                 return 1
             log(f'The server answered HTTP {code}.')
         except (OSError, websockets.WebSocketException) as error:
             code = None
             log(f'Cannot reach the server: {error}')
         if code == TOKEN_REFUSED:
-            log('The server refused this device token. Run with --login to link this Mac again.')
+            log('The server refused this device token. Run with --login to link this Mac again.',
+                'stopped', reason='token_refused')
             return 1
         if code == UNLINKED:
-            log('This Mac was unlinked from your account. Run with --login to link it again.')
+            log('This Mac was unlinked from your account. Run with --login to link it again.',
+                'stopped', reason='unlinked')
+            return 1
+        if code == REPLACED:
+            # Reconnecting would replace the other connector in turn, and the two would take
+            # over from each other forever, dropping every voice session.
+            log('Another connector of this account connected, so this one stops.', 'stopped', reason='replaced')
             return 1
         if code == SESSION_ENDED:
             continue  # A fresh MCP server for the next session, at once.
         delay = BACKOFF[min(attempt, len(BACKOFF) - 1)]
         attempt += 1
-        log(f'Disconnected; reconnecting in {delay} s.')
+        log(f'Disconnected; reconnecting in {delay} s.', 'disconnected', retry_in=delay)
         await asyncio.sleep(delay)
 
 
@@ -238,7 +270,13 @@ def main() -> int:
     parser.add_argument('--token-file', type=Path, default=TOKEN_FILE, help=f'Default: {TOKEN_FILE}')
     parser.add_argument('--read-only', action='store_true', help='Refuse tools that submit, on this Mac.')
     parser.add_argument('--debug', action='store_true', help="Show the MCP server's own log.")
+    parser.add_argument('--python', metavar='PYTHON',
+                        help='Run agent_mcp.py with this Python, which has its dependencies installed, '
+                             'instead of uv run --script (the Mac app passes its bundled Python).')
+    parser.add_argument('--events', action='store_true', help='Print JSON lines (event, message, ...) for the Mac app.')
     args = parser.parse_args()
+    global EVENTS
+    EVENTS = args.events
     if args.login:
         args.url = login(args.login, args.token_file, not args.no_browser)
     if not args.url:
@@ -256,8 +294,11 @@ def main() -> int:
         except OSError:
             parser.error(f'no device token: set AGENT_CONNECTOR_TOKEN or write it to {args.token_file}')
     server = os.environ.get('AGENT_MCP') or str(HERE / 'agent_mcp.py')
-    uv = shutil.which('uv') or '/opt/homebrew/bin/uv'
-    command = [uv, 'run', '--script', server]
+    if args.python:
+        command = [args.python, server]
+    else:
+        uv = shutil.which('uv') or '/opt/homebrew/bin/uv'
+        command = [uv, 'run', '--script', server]
 
     loop = asyncio.new_event_loop()
     task = loop.create_task(run(args.url, token, command, args.read_only, args.debug))
@@ -265,7 +306,7 @@ def main() -> int:
     try:
         return loop.run_until_complete(task)
     except asyncio.CancelledError:
-        log('Disconnected.')
+        log('Disconnected.', 'stopped', reason='interrupted')
         return 130
 
 

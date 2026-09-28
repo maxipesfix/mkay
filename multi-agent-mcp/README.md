@@ -191,7 +191,9 @@ two. The server can then use every tool listed above, exactly as a local client 
 - Each connection gets a fresh MCP server. When the server ends a session (close code
   4000) the connector reconnects at once; after other disconnects it retries after 1, 2,
   5, 10 and then every 30 seconds. A refused token (HTTP 401/403 or close code 4001) or
-  an unlinked Mac (close code 4003) stops it, since retrying cannot help.
+  an unlinked Mac (close code 4003) stops it, since retrying cannot help. So does being
+  replaced by a newer connector of the same account (close code 4002): two connectors
+  would otherwise take over from each other forever, dropping every voice session.
 - It requires `wss://`; plain `ws://` is accepted only to this Mac, for testing.
 - `--read-only` refuses, here on the Mac, every tool the MCP server marks as submitting
   (`send_message`, `submit_draft`, `ask_agent`, `cursor_answer_question`), whatever the
@@ -199,6 +201,12 @@ two. The server can then use every tool listed above, exactly as a local client 
   server's model can say so. Calls made before the tool list is known are refused too.
 - Every tool call is printed with its arguments, so you can see what the server does
   on your Mac. Ctrl-C disconnects.
+- For the Mac app (`macos-app/`): `--python PYTHON` runs `agent_mcp.py` with that Python
+  (its dependencies installed) instead of `uv run --script`, and `--events` prints one
+  JSON object per line instead of text: `code` (`user_code`, `verification_uri`),
+  `linked`, `connected` (`server`, `read_only`), `tool` (`name`, `arguments`, `refused`),
+  `disconnected` (`retry_in`), `log`, and `stopped` (`reason`: `token_refused`,
+  `unlinked`, `replaced`, `expired`, `unreachable`, `usage` or `interrupted`), each with a `message`.
 - The process that runs it needs Accessibility access, like any other client of the
   MCP server. The token comes from `AGENT_CONNECTOR_TOKEN` or `--token-file`
   (default `~/.config/agent-mcp/connector-token`).
