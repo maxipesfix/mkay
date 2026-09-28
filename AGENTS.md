@@ -150,6 +150,11 @@ These were learned by breaking them; keep them unless you have evidence otherwis
   then new chat and project, session, or the open chat. The view is checked again on
   "yes" (a change means a new read-back), and arguments the tools would refuse are
   refused before the read-back, so nobody confirms a send that cannot happen.
+- Listings are said as a summary made in code: `list_projects`/`list_sessions` results
+  reach the model as `say` (the first five in the app's order, and the total) plus the
+  whole list marked `lookup_only`. Told only in the prompt, the model read its own subset
+  and once skipped a project named in hiragana; with this shape it said the summary 6/6,
+  answered lookups from the full list, and read all names when asked (checked 2026-09-27).
 - Code-enforced spoken confirmation; own FastAPI server on 127.0.0.1 with Host/Origin
   checks, one session at a time (a new connection replaces the old one).
 - Importable: `create_app` takes `open_tools(user)` and `authorize(request)` hooks,
