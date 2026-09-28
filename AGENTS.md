@@ -32,7 +32,7 @@ multi-agent-cli/test/test_cursor_navigation.py              # live navigation te
 multi-agent-mcp/test/test_mcp_server.py --app chatgpt --http   # MCP smoke test: read-only tools, refusals, HTTP auth
 local-voice-ptt/voice_ptt.py --text                          # voice client with typed input
 local-voice-ptt/voice_ptt.py --debug-keys                    # push-to-talk key and permission check
-local-voice-pipecat/voice_pipecat.py                         # then open http://localhost:7860/ and Connect
+local-voice-pipecat/voice_pipecat.py                         # then open http://localhost:7860/ and Start talking
 macos-app/build.sh                                           # build/m’kay.app and build/m’kay-VERSION.dmg
 ```
 
@@ -141,7 +141,9 @@ These were learned by breaking them; keep them unless you have evidence otherwis
 - Used live by voice with ChatGPT, Claude Code and Cursor (see its README's Status).
 
 **Pipecat voice client** (`local-voice-pipecat`)
-- Pipecat 1.12 pipeline: browser over SmallWebRTC and Pipecat's prebuilt page, Silero
+- Pipecat 1.12 pipeline: browser over SmallWebRTC and its own page (`static/`, the
+  cloud account page's "Talk to your Mac" card; `static/talk.js` is built from `client/`
+  and committed, so running it needs no Node), Silero
   VAD and Smart Turn v3, local faster-whisper and Kokoro, OpenAI Responses (WebSocket)
   or Claude; no PyTorch.
 - MCP tools bridged directly (progress for "Still waiting", learned names primed into
@@ -150,6 +152,9 @@ These were learned by breaking them; keep them unless you have evidence otherwis
   then new chat and project, session, or the open chat. The view is checked again on
   "yes" (a change means a new read-back), and arguments the tools would refuse are
   refused before the read-back, so nobody confirms a send that cannot happen.
+- Local page menus (Listening, Voice, Model) list what the server can use (`/options`: keys
+  set, local speech always, the models of a running LM Studio or Ollama server); `/start`
+  refuses anything else, and `run_bot(stt=, voice=, llm_choice=)` applies them per session.
 - Listings are said as a summary made in code: `list_projects`/`list_sessions` results
   reach the model as `say` (the first five in the app's order, and the total) plus the
   whole list marked `lookup_only`. Told only in the prompt, the model read its own subset
@@ -196,6 +201,8 @@ These were learned by breaking them; keep them unless you have evidence otherwis
 ## TODO
 
 **Not yet verified live**
+- Local page: a session with Whisper and Kokoro chosen from the menus, and with every Fish
+  and Kokoro voice.
 - Pipecat client: a longer spoken conversation after the event-loop fix, barge-in,
   and a send through it (read-only tools and opening a session worked by voice).
 - Pipecat client with Deepgram and Fish: a spoken conversation (only the greeting was
@@ -227,6 +234,11 @@ These were learned by breaking them; keep them unless you have evidence otherwis
 - MCP tool descriptions keep docstring indentation; clean them up.
 
 **Next steps (roadmap)**
+- Local LLM (backlog): the code is in place (the Model menu lists the models of a running
+  LM Studio or Ollama server; `VOICE_PROVIDER=local`) but untested. Pipecat's PhoneLLM
+  Alpha 1 (Nemotron 3 Nano 30B-A3B fine-tune for voice agents' tool calling) is the
+  candidate: its 4-bit GGUF is 24.5 GB, so it needs a Mac with 32 GB or more, temperature
+  0 and thinking off. No model small enough for 16 GB scores well in kwindla/aiewf-eval.
 - Mac app: Sparkle updates (appcast on mkay.ai), Intel build, token in the Keychain,
   "Move to Applications" when opened from the disk image.
 - `local-voice-pipecat` from a phone on your own network: `tailscale serve` for HTTPS,

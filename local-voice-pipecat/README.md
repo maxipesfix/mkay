@@ -38,18 +38,41 @@ The same page is meant to be opened from a phone next (see [Next: the phone](#ne
    belongs to the browser, not the terminal, and no Input Monitoring is needed.
 
 ```bash
-cd /Users/maxim/susurobo/code/mkay/local-voice-pipecat
+cd local-voice-pipecat
 ./voice_pipecat.py
 ```
 
-Then open <http://localhost:7860/>, click **Connect** and allow the microphone. The bot
-says "Ready." when it is listening.
+Then open <http://localhost:7860/>, click **Start talking** and allow the microphone. The
+bot says "Ready." when it is listening. The page is the same "Talk to your Mac" card as
+the account page of the cloud service: a circular waveform of both voices, the status
+(Listening, Hearing you, Thinking, Speaking) and the conversation below it; **End** stops.
 
 The first run installs the dependencies (no PyTorch: Whisper, Silero, Smart Turn and
 Kokoro all run on CTranslate2 or ONNX Runtime). With local speech, the first session
-downloads the Kokoro voice model (about 350 MB, into `~/.cache/pipecat/kokoro-onnx`); the
-Whisper model `small.en` is the one the push-to-talk client already downloaded. Later
+downloads the Kokoro voice model (about 350 MB, into `~/.cache/pipecat/kokoro-onnx`) and
+the Whisper model `small.en` (about 480 MB, shared with the push-to-talk client). Later
 sessions start in about 3 seconds.
+
+## Choosing speech and the model
+
+Under the circle, three menus choose the services for the next session (the browser
+remembers them); they list only what this Mac can use:
+
+- **Listening:** Deepgram when `DEEPGRAM_API_KEY` is set; Whisper on this Mac always.
+- **Voice:** Cartesia's and Fish Audio's voices when their keys are set; Kokoro's voices
+  on this Mac always.
+- **Model:** OpenAI and Claude when their keys are set, and every model of a local LLM
+  server that is running: LM Studio (port 1234), Ollama (11434), or `VOICE_LOCAL_LLM_URL`.
+
+The `.env` settings (`VOICE_STT`, `VOICE_TTS`, the voices, `VOICE_PROVIDER`) are the
+preselected choices. The server checks each choice against what it offers, so a page
+cannot ask for a service that is not set up.
+
+A local model keeps the conversation on this Mac (with Whisper and Kokoro, nothing leaves
+it). It must support tool calling, since everything the assistant does is a tool call.
+Pipecat's own macOS example ([kwindla/macos-local-voice-agents](https://github.com/kwindla/macos-local-voice-agents))
+runs its model in LM Studio. Load a model there (Developer tab, start the server) or in
+Ollama (`ollama pull MODEL`), then reload the page: the model appears under the server's name.
 
 ## Using it
 
@@ -144,10 +167,19 @@ app. `run_bot(..., echo_guard=True)` is for phones on their speaker, whose echo
 cancellation sometimes lets the bot hear itself: while the bot speaks and for 1 s
 after, only three or more transcribed words start a turn (it needs Deepgram).
 
+## Changing the page
+
+`static/talk.js` is built from `client/` and committed, so running the client needs no
+Node. After changing `client/`, rebuild it:
+
+```bash
+cd local-voice-pipecat/client && npm ci && npm run build
+```
+
 ## Troubleshooting
 
 - **The session ended by itself:** after five minutes without speech (`IDLE_MINUTES`) the
-  bot says so and ends the session; Connect again. Long waits for an agent do not count,
+  bot says so and ends the session; click Start talking again. Long waits for an agent do not count,
   since the bot says "Still waiting" during them.
 - **"Microphone blocked" on the page:** allow the microphone for `localhost` in the
   browser's site settings and reload.
@@ -156,8 +188,8 @@ after, only three or more transcribed words start a turn (it needs Deepgram).
 - **"No microphone audio from the browser":** the server received no audio for 3
   seconds while WebRTC was connected. If "resumed" follows in the same second, the
   server itself was stalled rather than the browser. Otherwise the page stopped sending:
-  microphone muted on the page, input device changed, or the tab suspended. Click
-  Disconnect and Connect.
+  microphone muted on the page, input device changed, or the tab suspended. Click End,
+  then Start talking.
 - **Japanese names:** with Kokoro and Cartesia, the model is told to say names in
   non-Latin scripts in romaji (そばとも as "Sobatomo"); tool arguments keep the exact
   title. Kokoro speaks English only, and Cartesia's sonic-3.6 silently skips hiragana in
@@ -174,7 +206,8 @@ Set in `.env` (see `.env.example`):
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `VOICE_PROVIDER` | `openai` | `openai` (Responses API over WebSocket) or `anthropic` |
+| `VOICE_PROVIDER` | `openai` | `openai` (Responses API over WebSocket), `anthropic`, or `local` (a local LLM server) |
+| `VOICE_LOCAL_LLM_URL`, `VOICE_LOCAL_MODEL` | LM Studio, then Ollama; the server's first model | An OpenAI-compatible local server (such as `http://127.0.0.1:1234/v1`) and its model for `local` |
 | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | — | The key for the chosen provider |
 | `VOICE_MODEL` | `gpt-5.5` (OpenAI), `claude-opus-5` (Claude) | Model that picks the tools |
 | `VOICE_EFFORT` | `low` | Reasoning effort |
@@ -186,7 +219,7 @@ Set in `.env` (see `.env.example`):
 | `VOICE_STT_LANGUAGE` | `en` | Deepgram language: a code such as `ja`, or `multi` |
 | `VOICE_FISH_VOICE`, `VOICE_FISH_MODEL` | `sarah`, `s2.1-pro` | Fish Audio voice (`sarah`, `hannah`, `ethan`, `adrian`, or a model ID from fish.audio) and model |
 | `VOICE_VOCABULARY` | — | Comma-separated words speech recognition should always expect |
-| `VOICE_KOKORO_VOICE`, `VOICE_KOKORO_SPEED` | `af_heart`, 1.0 | Kokoro voice and speed |
+| `VOICE_KOKORO_VOICE`, `VOICE_KOKORO_SPEED` | `heart`, 1.0 | Kokoro voice (heart, bella, michael, emma, george, or a Kokoro voice such as `af_sky`) and speed |
 | `VOICE_PORT` | `7860` | Port for the page and WebRTC signaling (`--port`) |
 | `VOICE_DEBUG` | off | `1` shows Pipecat's debug log |
 | `VOICE_LOG_CONTENT` | on | `0` logs only the length of what was said, tool arguments and results, not their text |
@@ -216,7 +249,8 @@ learned names in `~/.cache/local-voice-ptt/names.json`, so `../local-voice-ptt/v
 
 | Part | Package | License |
 | --- | --- | --- |
-| Pipeline, transport, web client | `pipecat-ai`, `pipecat-ai-prebuilt`, `aiortc` | BSD-2-Clause, BSD-2-Clause, BSD-3-Clause |
+| Pipeline, transport | `pipecat-ai`, `aiortc` | BSD-2-Clause, BSD-3-Clause |
+| Web page (`static/`, built from `client/`) | `@pipecat-ai/client-js`, `@pipecat-ai/small-webrtc-transport`; the waveform from Pipecat's `voice-ui-kit` | BSD-2-Clause (see `static/talk.js.LEGAL.txt`) |
 | Turn detection | Silero VAD, Smart Turn v3 (bundled with Pipecat) | MIT, BSD-2-Clause |
 | Speech recognition | Deepgram API (`deepgram-sdk`, MIT); local `faster-whisper` with Systran's converted Whisper models | Service terms; MIT |
 | Speech | Cartesia and Fish Audio APIs; local `kokoro-onnx` with the Kokoro-82M model | Service terms; MIT, Apache-2.0 |

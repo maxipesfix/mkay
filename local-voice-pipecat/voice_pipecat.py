@@ -31,6 +31,7 @@ import re
 import shutil
 import sys
 import time
+import urllib.request
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -123,6 +124,25 @@ CARTESIA_VOICES = {
     'archie': ('Archie', 'ef191366-f52f-447a-a398-ed8c0f2943a1', 'male, British'),
 }
 CARTESIA_DEFAULT_VOICE = 'daniel'
+# Kokoro voices that run on this Mac: key -> (name, Kokoro voice, description).
+KOKORO_VOICES = {
+    'heart': ('Heart', 'af_heart', 'female, American'),
+    'bella': ('Bella', 'af_bella', 'female, American'),
+    'michael': ('Michael', 'am_michael', 'male, American'),
+    'emma': ('Emma', 'bf_emma', 'female, British'),
+    'george': ('George', 'bm_george', 'male, British'),
+}
+KOKORO_DEFAULT_VOICE = 'heart'
+# Engine -> (display name, API key variable or None for local, voices, default voice).
+TTS_ENGINES = {
+    'cartesia': ('Cartesia', 'CARTESIA_API_KEY', CARTESIA_VOICES, CARTESIA_DEFAULT_VOICE),
+    'fish': ('Fish Audio', 'FISH_API_KEY', FISH_VOICES, FISH_DEFAULT_VOICE),
+    'kokoro': ('Kokoro, on this Mac', None, KOKORO_VOICES, KOKORO_DEFAULT_VOICE),
+}
+# A local LLM: any OpenAI-compatible server on this Mac, VOICE_LOCAL_LLM_URL or the first of
+# these that answers. LM Studio is what Pipecat's macOS example (kwindla/macos-local-voice-
+# agents) uses; Ollama works the same way. The model must support tool calling.
+LOCAL_LLM_SERVERS = (('LM Studio', 'http://127.0.0.1:1234/v1'), ('Ollama', 'http://127.0.0.1:11434/v1'))
 
 
 def speech_services() -> tuple[str, str]:
@@ -130,6 +150,46 @@ def speech_services() -> tuple[str, str]:
     tts = os.environ.get('VOICE_TTS') or ('cartesia' if os.environ.get('CARTESIA_API_KEY') else
                                           'fish' if os.environ.get('FISH_API_KEY') else 'kokoro')
     return stt.lower(), tts.lower()
+
+
+def local_llm() -> tuple[str, str, list[str]] | None:
+    """(server name, base URL, model IDs) of the first local LLM server that answers, or None."""
+    configured = os.environ.get('VOICE_LOCAL_LLM_URL')
+    for name, url in ((('Local server', configured),) if configured else LOCAL_LLM_SERVERS):
+        try:
+            with urllib.request.urlopen(url.rstrip('/') + '/models', timeout=1) as response:
+                data = json.load(response).get('data') or []
+        except (OSError, ValueError, AttributeError):
+            continue
+        # Embedding models are listed too, but cannot hold a conversation.
+        models = [m['id'] for m in data if isinstance(m, dict) and m.get('id') and 'embed' not in m['id'].lower()]
+        if models:
+            return name, url, models
+    return None
+
+
+def session_options(provider: str) -> dict:
+    """What the page may choose for a session: speech and LLMs whose keys are set, local ones
+    always (a local LLM when its server answers), and the defaults from the environment."""
+    stt = [{'id': 'whisper', 'label': 'Whisper, on this Mac'}]
+    if os.environ.get('DEEPGRAM_API_KEY'):
+        stt.insert(0, {'id': 'deepgram', 'label': 'Deepgram'})
+    voices = [{'id': f'{engine}:{key}', 'label': f'{name} ({description})', 'group': title}
+              for engine, (title, variable, table, _) in TTS_ENGINES.items()
+              if variable is None or os.environ.get(variable)
+              for key, (name, _, description) in table.items()]
+    llms = [{'id': name, 'label': f'{"OpenAI" if name == "openai" else "Anthropic"} {os.environ.get("VOICE_MODEL") if name == provider and os.environ.get("VOICE_MODEL") else model}',
+             'group': 'Cloud'}
+            for name, (variable, model) in PROVIDERS.items() if os.environ.get(variable)]
+    local = local_llm()
+    if local:
+        llms += [{'id': f'local:{model}', 'label': model, 'group': f'{local[0]}, on this Mac'} for model in local[2]]
+    default_stt, default_tts = speech_services()
+    table, default_voice = TTS_ENGINES[default_tts][2], TTS_ENGINES[default_tts][3]
+    configured = (os.environ.get(f'VOICE_{default_tts.upper()}_VOICE') or '').lower()
+    return {'stt': stt, 'voice': voices, 'llm': llms,
+            'default': {'stt': default_stt, 'llm': provider,
+                        'voice': f'{default_tts}:{configured if configured in table else default_voice}'}}
 
 
 YES = re.compile(r"\b(yes|yeah|yep|yup|sure|confirm(ed)?|go ahead|do it|send( it)?|correct|ok(ay)?)\b", re.I)
@@ -303,24 +363,25 @@ def named_voice(voice: str, voices: dict) -> str:
     return voices[voice.lower()][1] if voice.lower() in voices else voice
 
 
-def make_tts(kind: str):
+def make_tts(kind: str, voice: str | None = None):
+    """The speech service; voice (a key of that engine's voices, or an ID) wins over VOICE_*_VOICE."""
     if kind == 'cartesia':
         from pipecat.services.cartesia.tts import CartesiaTTSService
         return CartesiaTTSService(
             api_key=os.environ['CARTESIA_API_KEY'],
             settings=CartesiaTTSService.Settings(
-                voice=named_voice(os.environ.get('VOICE_CARTESIA_VOICE') or CARTESIA_DEFAULT_VOICE, CARTESIA_VOICES),
+                voice=named_voice(voice or os.environ.get('VOICE_CARTESIA_VOICE') or CARTESIA_DEFAULT_VOICE, CARTESIA_VOICES),
                 **({'model': os.environ['VOICE_CARTESIA_MODEL']} if os.environ.get('VOICE_CARTESIA_MODEL') else {})))
     if kind == 'fish':
         from pipecat.services.fish.tts import FishAudioTTSService
         return FishAudioTTSService(
             api_key=os.environ['FISH_API_KEY'],
             settings=FishAudioTTSService.Settings(
-                voice=named_voice(os.environ.get('VOICE_FISH_VOICE') or FISH_DEFAULT_VOICE, FISH_VOICES),
+                voice=named_voice(voice or os.environ.get('VOICE_FISH_VOICE') or FISH_DEFAULT_VOICE, FISH_VOICES),
                 **({'model': os.environ['VOICE_FISH_MODEL']} if os.environ.get('VOICE_FISH_MODEL') else {})))
     from pipecat.services.kokoro.tts import KokoroTTSService
     return KokoroTTSService(settings=KokoroTTSService.Settings(
-        voice=os.environ.get('VOICE_KOKORO_VOICE') or 'af_heart',
+        voice=named_voice(voice or os.environ.get('VOICE_KOKORO_VOICE') or KOKORO_DEFAULT_VOICE, KOKORO_VOICES),
         **({'speed': float(os.environ['VOICE_KOKORO_SPEED'])} if os.environ.get('VOICE_KOKORO_SPEED') else {})))
 
 
@@ -422,6 +483,7 @@ class AgentTools:
         self.mcp, self.tools = mcp_client, tools
         self.submitting = {t.name for t in tools if t.annotations and t.annotations.destructive_hint}
         self.names = names or Names()
+        self.stt_kind: str | None = None  # This session's speech recognition (run_bot sets it).
         self.reset()
 
     def reset(self) -> None:
@@ -566,7 +628,7 @@ class AgentTools:
 
     async def update_hotwords(self) -> None:
         from pipecat.frames.frames import STTUpdateSettingsFrame
-        if speech_services()[0] == 'deepgram':
+        if (self.stt_kind or speech_services()[0]) == 'deepgram':
             # Deepgram reconnects to apply new keyterms; this runs during a tool call, while
             # the user is muted, so no speech is lost.
             from pipecat.services.deepgram.stt import DeepgramSTTService
@@ -669,8 +731,19 @@ def quiet_pipecat_audio_timeouts(record) -> bool:
     return 'No audio frame received within the specified time' not in record['message']
 
 
-def make_llm(provider: str, prompt: str):
-    model = os.environ.get('VOICE_MODEL') or PROVIDERS[provider][1]
+def make_llm(provider: str, prompt: str, model: str | None = None):
+    """The LLM service: 'openai', 'anthropic', or 'local' with model (a local server's model ID)."""
+    if provider == 'local':
+        from pipecat.services.openai.llm import OpenAILLMService
+        server = local_llm()
+        if not server:
+            raise RuntimeError('No local LLM server answers (LM Studio on port 1234, Ollama on 11434, '
+                               'or VOICE_LOCAL_LLM_URL).')
+        return OpenAILLMService(
+            api_key='local', base_url=server[1],
+            settings=OpenAILLMService.Settings(model=model or os.environ.get('VOICE_LOCAL_MODEL') or server[2][0],
+                                               system_instruction=prompt))
+    model = model or os.environ.get('VOICE_MODEL') or PROVIDERS[provider][1]
     effort = os.environ.get('VOICE_EFFORT', 'low')
     if provider == 'openai':
         from pipecat.services.openai.responses.llm import (OpenAIResponsesLLMService,
@@ -706,7 +779,8 @@ def smallwebrtc_transport(connection):
         webrtc_connection=connection, params=TransportParams(audio_in_enabled=True, audio_out_enabled=True))
 
 
-async def run_bot(transport, agent_tools: AgentTools, provider: str, *, echo_guard: bool = False) -> None:
+async def run_bot(transport, agent_tools: AgentTools, provider: str, *, echo_guard: bool = False,
+                  stt: str | None = None, voice: str | None = None, llm_choice: str | None = None) -> None:
     """One voice session over a Pipecat transport with audio in and out.
 
     Locally that is a browser's WebRTC connection (smallwebrtc_transport); a server can pass
@@ -714,6 +788,10 @@ async def run_bot(transport, agent_tools: AgentTools, provider: str, *, echo_gua
     (the transport's on_client_disconnected event), after IDLE_MINUTES without speech (the
     bot says so first), or when agent_tools.runner is cancelled. echo_guard keeps the bot
     from taking its own echo for user speech (echo_guard_start); it needs Deepgram.
+
+    stt ('deepgram' or 'whisper'), voice ('engine:voice', such as 'kokoro:heart') and
+    llm_choice ('openai', 'anthropic' or 'local:MODEL') choose this session's services, as
+    the local page does (see session_options); None keeps the environment's defaults.
     """
     from pipecat.audio.vad.silero import SileroVADAnalyzer
     from pipecat.frames.frames import TTSSpeakFrame
@@ -726,13 +804,20 @@ async def run_bot(transport, agent_tools: AgentTools, provider: str, *, echo_gua
     from pipecat.turns.user_turn_strategies import UserTurnStrategies
     from pipecat.workers.runner import WorkerRunner
 
-    stt_kind, tts_kind = speech_services()
+    default_stt, default_tts = speech_services()
+    stt_kind = stt or default_stt
+    tts_kind, _, voice_key = (voice or default_tts).partition(':')
+    llm_provider, _, llm_model = (llm_choice or provider).partition(':')
+    agent_tools.stt_kind = stt_kind
     if echo_guard and stt_kind != 'deepgram':
         log('The echo guard needs Deepgram (DEEPGRAM_API_KEY); running without it.')
         echo_guard = False
     stt = make_stt(stt_kind, agent_tools.names)
-    tts = make_tts(tts_kind)
-    llm = make_llm(provider, SYSTEM_PROMPT + (ENGLISH_ONLY_SPEECH if tts_kind in ENGLISH_ONLY_ENGINES else ''))
+    tts = make_tts(tts_kind, voice_key or None)
+    llm = make_llm(llm_provider, SYSTEM_PROMPT + (ENGLISH_ONLY_SPEECH if tts_kind in ENGLISH_ONLY_ENGINES else ''),
+                   llm_model or None)
+    if stt or voice or llm_choice:
+        log(f'Session: {stt_kind} in, {tts_kind} {voice_key or "default voice"} out, {llm_choice or provider}.')
     agent_tools.register(llm)
 
     context = LLMContext(tools=agent_tools.schemas())
@@ -827,11 +912,11 @@ def create_app(provider: str, allowed_hosts: set[str], open_tools, *, authorize=
         lifespan: Optional async context manager factory run for the app's lifetime.
     """
     from fastapi import FastAPI, HTTPException, Request
-    from fastapi.responses import JSONResponse, RedirectResponse
+    from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+    from fastapi.staticfiles import StaticFiles
     from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
     from pipecat.transports.smallwebrtc.request_handler import (IceCandidate, SmallWebRTCPatchRequest,
                                                                 SmallWebRTCRequest, SmallWebRTCRequestHandler)
-    from pipecat_ai_prebuilt.frontend import PipecatPrebuiltUI
 
     handler = SmallWebRTCRequestHandler()
     # user -> (session task, AgentTools of that session); session id -> user.
@@ -849,28 +934,53 @@ def create_app(provider: str, allowed_hosts: set[str], open_tools, *, authorize=
     app = FastAPI(lifespan=app_lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     check_host_and_origin(app, allowed_hosts)
 
-    app.mount('/client', PipecatPrebuiltUI)
+    # The page (static/index.html) and its client (static/talk.js, built from client/): the
+    # same "Talk to your Mac" card as mkay-cloud's account page, over SmallWebRTC.
+    app.mount('/static', StaticFiles(directory=HERE / 'static'), name='static')
 
     @app.get('/', include_in_schema=False)
     async def root():
-        return RedirectResponse(url='/client/')
+        return FileResponse(HERE / 'static' / 'index.html')
+
+    @app.get('/client/', include_in_schema=False)
+    async def old_page():
+        return RedirectResponse(url='/')  # Pipecat's prebuilt page used to be here.
+
+    @app.get('/options')
+    async def options(request: Request):
+        # The page's menus: speech and LLMs this server can use (keys set, local servers up).
+        if authorize:
+            await authorize(request)
+        return await asyncio.to_thread(session_options, provider)
 
     @app.post('/start')
     async def start(request: Request):
-        # The prebuilt client asks for a session, then sends its WebRTC offer to it.
+        # The page asks for a session with its choices, then sends its WebRTC offer to it.
         user = await authorize(request) if authorize else LOCAL_USER
+        try:
+            body = await request.json()
+        except ValueError:
+            body = {}
+        choices = {}
+        if isinstance(body, dict) and any(body.get(key) for key in ('stt', 'voice', 'llm')):
+            available = await asyncio.to_thread(session_options, provider)
+            for key in ('stt', 'voice', 'llm'):
+                value = body.get(key)
+                if value and value not in {option['id'] for option in available[key]}:
+                    raise HTTPException(status_code=400, detail=f'{value} is not available on this server.')
+                choices[key] = value or None
         session_id = str(uuid.uuid4())
-        state['sessions'][session_id] = user
+        state['sessions'][session_id] = (user, choices)
         return {'sessionId': session_id}
 
-    async def offer(request: SmallWebRTCRequest, user: str):
+    async def offer(request: SmallWebRTCRequest, user: str, choices: dict):
         async def on_connection(connection: SmallWebRTCConnection):
             previous = state['bots'].get(user)
-            task = asyncio.create_task(start_bot(connection, user, previous[0] if previous else None))
+            task = asyncio.create_task(start_bot(connection, user, previous[0] if previous else None, choices))
             state['bots'][user] = (task, None)
         return await handler.handle_web_request(request=request, webrtc_connection_callback=on_connection)
 
-    async def start_bot(connection, user: str, previous: asyncio.Task | None) -> None:
+    async def start_bot(connection, user: str, previous: asyncio.Task | None, choices: dict) -> None:
         # One session per user: a new connection (for example a reloaded page) replaces the
         # old one, so two conversations never drive the same desktop at once.
         if previous and not previous.done():
@@ -882,7 +992,8 @@ def create_app(provider: str, allowed_hosts: set[str], open_tools, *, authorize=
             async with open_tools(user) as agent_tools:
                 agent_tools.reset()
                 state['bots'][user] = (me, agent_tools)
-                await run_bot(smallwebrtc_transport(connection), agent_tools, provider)
+                await run_bot(smallwebrtc_transport(connection), agent_tools, provider,
+                              stt=choices.get('stt'), voice=choices.get('voice'), llm_choice=choices.get('llm'))
         except Exception as error:
             log(f'Session failed: {error!r}')
         finally:
@@ -903,7 +1014,7 @@ def create_app(provider: str, allowed_hosts: set[str], open_tools, *, authorize=
 
     @app.api_route('/sessions/{session_id}/api/offer', methods=['POST', 'PATCH'])
     async def session_offer(session_id: str, request: Request):
-        user = state['sessions'].get(session_id)
+        user, choices = state['sessions'].get(session_id, (None, {}))
         if user is None:
             raise HTTPException(status_code=404, detail='Unknown session')
         if authorize and await authorize(request) != user:
@@ -913,7 +1024,7 @@ def create_app(provider: str, allowed_hosts: set[str], open_tools, *, authorize=
             return await offer(SmallWebRTCRequest(
                 sdp=data['sdp'], type=data['type'], pc_id=data.get('pc_id'),
                 restart_pc=data.get('restart_pc'),
-                request_data=data.get('request_data') or data.get('requestData')), user)
+                request_data=data.get('request_data') or data.get('requestData')), user, choices)
         await handler.handle_patch_request(SmallWebRTCPatchRequest(
             pc_id=data['pc_id'], candidates=[IceCandidate(**c) for c in data.get('candidates', [])]))
         return {'status': 'success'}
@@ -953,13 +1064,17 @@ def main() -> int:
                filter=None if debugging else quiet_pipecat_audio_timeouts)
 
     provider = os.environ.get('VOICE_PROVIDER', 'openai').lower()
-    if provider not in PROVIDERS:
-        print(f'VOICE_PROVIDER must be one of: {", ".join(PROVIDERS)}.', file=sys.stderr)
+    if provider not in PROVIDERS and provider != 'local':
+        print(f'VOICE_PROVIDER must be one of: {", ".join(PROVIDERS)}, local.', file=sys.stderr)
         return 2
-    key_var = PROVIDERS[provider][0]
-    if not os.environ.get(key_var):
-        print(f'Set {key_var} in local-voice-pipecat/.env for VOICE_PROVIDER={provider} (see .env.example).',
-              file=sys.stderr)
+    if provider == 'local':
+        if not local_llm():
+            print('VOICE_PROVIDER=local needs a local LLM server: LM Studio (port 1234), Ollama (11434), '
+                  'or VOICE_LOCAL_LLM_URL.', file=sys.stderr)
+            return 2
+    elif not os.environ.get(PROVIDERS[provider][0]):
+        print(f'Set {PROVIDERS[provider][0]} in local-voice-pipecat/.env for VOICE_PROVIDER={provider} '
+              '(see .env.example).', file=sys.stderr)
         return 2
     stt_kind, tts_kind = speech_services()
     for kind, kinds, variable in ((stt_kind, STT_KINDS, 'VOICE_STT'), (tts_kind, TTS_KINDS, 'VOICE_TTS')):
@@ -986,7 +1101,8 @@ def main() -> int:
         async with Client(params, read_timeout_seconds=TOOL_TIMEOUT + 40) as mcp_client:
             tools = (await mcp_client.list_tools()).tools
             shared['tools'] = AgentTools(mcp_client, tools)
-            model = os.environ.get('VOICE_MODEL') or PROVIDERS[provider][1]
+            model = (os.environ.get('VOICE_LOCAL_MODEL') or 'the first local model' if provider == 'local'
+                     else os.environ.get('VOICE_MODEL') or PROVIDERS[provider][1])
             log(f'Ready: {len(tools)} tools, {provider} {model}, effort {os.environ.get("VOICE_EFFORT", "low")}, '
                 f'speech {stt_kind} in, {tts_kind} out. '
                 f'Open http://localhost:{args.port}/ and allow the microphone (Ctrl-C to quit).')

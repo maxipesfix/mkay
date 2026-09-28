@@ -1,0 +1,16 @@
+{
+  "name": "mkay-local-talk",
+  "private": true,
+  "description": "The local voice page's client (Pipecat client with the SmallWebRTC transport), bundled to ../static/talk.js. The built file is committed, so running the voice client needs only uv.",
+  "type": "module",
+  "scripts": {
+    "build": "esbuild talk.js --bundle --minify --format=esm --target=es2020 --legal-comments=linked --outfile=../static/talk.js"
+  },
+  "dependencies": {
+    "@pipecat-ai/client-js": "1.13.1",
+    "@pipecat-ai/small-webrtc-transport": "1.10.8"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}

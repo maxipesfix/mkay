@@ -28,3 +28,6 @@ venv/
 # Mac app build output
 macos-app/build/
 macos-app/.build/
+
+# Web client dependencies (the built bundle in static/ is committed)
+node_modules/

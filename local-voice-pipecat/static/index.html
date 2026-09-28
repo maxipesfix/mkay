@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>m’kay</title>
+<style>
+:root { --bg: #fafaf9; --card: #ffffff; --fg: #1c1917; --muted: #57534e; --line: #e7e5e4;
+        --accent: #1c1917; --accent-fg: #fafaf9; --error: #b91c1c; --ok: #15803d; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #1c1917; --card: #292524; --fg: #f5f5f4; --muted: #a8a29e; --line: #44403c;
+          --accent: #f5f5f4; --accent-fg: #1c1917; --error: #f87171; --ok: #4ade80; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; min-height: 100vh; padding: 32px 16px; background: var(--bg); color: var(--fg);
+       font: 16px/1.5 system-ui, -apple-system, sans-serif; }
+main { max-width: 26rem; margin: 0 auto; }
+header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
+.brand { font-size: 1.6rem; font-weight: 700; letter-spacing: -.02em; color: var(--fg); text-decoration: none; }
+h1 { font-size: 1.3rem; margin: 0 0 .75rem; }
+p { margin: 0 0 1rem; }
+.muted { color: var(--muted); }
+.small { font-size: .85rem; }
+.muted a { color: var(--muted); }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 20px; margin-bottom: 16px; }
+button, .button { display: inline-flex; justify-content: center; align-items: center; gap: .5rem; width: 100%;
+         padding: .7rem 1rem; border-radius: 10px; border: 1px solid var(--accent); background: var(--accent);
+         color: var(--accent-fg); font: inherit; font-weight: 600; cursor: pointer; text-decoration: none; }
+button.secondary, .button.secondary { background: transparent; color: var(--fg); border-color: var(--line); }
+button:disabled, .button.disabled { opacity: .45; cursor: not-allowed; pointer-events: none; }
+button + button { margin-top: .6rem; }
+.message { min-height: 1.5em; margin: .75rem 0 0; font-size: .95rem; }
+.message.error { color: var(--error); }
+.message.ok { color: var(--ok); }
+.dot { display: inline-block; width: .6rem; height: .6rem; border-radius: 50%; background: var(--muted); margin-right: .4rem; }
+.dot.on { background: var(--ok); }
+.dot.busy { background: #d97706; }
+.status { display: flex; align-items: center; margin: 0 0 1rem; }
+.stage { position: relative; width: 100%; max-width: 22rem; aspect-ratio: 1; margin: 0 auto .75rem; }
+.stage canvas { position: absolute; inset: 0; }
+.stage .controls { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center;
+                   justify-content: center; gap: .25rem; }
+.stage .status { margin: 0; font-size: .95rem; }
+.stage button { width: auto; border-radius: 999px; padding: .7rem 1.5rem; }
+.choices { display: grid; grid-template-columns: auto 1fr; gap: .5rem .75rem; align-items: center; margin: 0 0 .5rem; }
+.choices label { font-size: .9rem; color: var(--muted); }
+.choices select { width: 100%; min-width: 0; padding: .5rem .6rem; border-radius: 9px; border: 1px solid var(--line);
+                  background: var(--bg); color: var(--fg); font: inherit; font-size: .95rem; }
+#log { list-style: none; padding: 0; margin: 1rem 0 0; max-height: 50vh; overflow-y: auto; }
+#log li { padding: .5rem 0; border-top: 1px solid var(--line); }
+#log .who { display: block; font-size: .8rem; color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <span class="brand">m’kay</span>
+  </header>
+
+  <section class="card">
+    <h1>Talk to your Mac</h1>
+    <div class="stage" id="stage">
+      <canvas id="wave"></canvas>
+      <div class="controls">
+        <p class="status"><span id="dot" class="dot on"></span><span id="status">Ready</span></p>
+        <button type="button" id="talk">Start talking</button>
+      </div>
+    </div>
+    <div class="choices" id="choices" hidden>
+      <label for="choice-stt">Listening</label><select id="choice-stt" data-choice="stt"></select>
+      <label for="choice-voice">Voice</label><select id="choice-voice" data-choice="voice"></select>
+      <label for="choice-llm">Model</label><select id="choice-llm" data-choice="llm"></select>
+    </div>
+    <p id="error" class="message error" hidden></p>
+    <p class="muted" style="margin:.75rem 0 0">Allow the microphone when asked. Nothing is sent without your spoken OK.</p>
+    <ul id="log" hidden></ul>
+    <audio id="bot-audio" autoplay playsinline></audio>
+  </section>
+</main>
+<script type="module" src="/static/talk.js"></script>
+</body>
+</html>
