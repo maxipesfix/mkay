@@ -117,5 +117,8 @@ Notarized 2026-09-27: a Developer ID build (hardened runtime) was accepted by Ap
 stapled (the first submission took about 20 minutes); the bundled Python still loads its
 native modules and serves the 17 tools under the hardened runtime.
 
-Not yet done: sign-in and a voice session through the app; a first launch on another Mac; updates (Sparkle);
-Intel Macs; the token in the Keychain instead of a file.
+Checked 2026-09-28: sign-in and a voice session through the app, from a phone's
+browser.
+
+Not yet done: a first launch on another Mac; updates (Sparkle); Intel Macs; the token in
+the Keychain instead of a file.

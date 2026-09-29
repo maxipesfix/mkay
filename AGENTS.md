@@ -197,6 +197,8 @@ These were learned by breaking them; keep them unless you have evidence otherwis
   from the bundled Python, setup window, connector events; notarized and stapled.
 - Published as GitHub release v0.1.0 (`mkay.dmg`, 2026-09-28); the landing page's
   Download for Mac links to `releases/latest/download/mkay.dmg`.
+- Checked 2026-09-28: sign-in and a voice session through the app, from a phone's
+  browser.
 
 **ChatGPT reading**
 - `read` returns a document card's text ("Writing" replies keep it in an editor inside
@@ -221,8 +223,7 @@ These were learned by breaking them; keep them unless you have evidence otherwis
 - ChatGPT: paging a collapsed Projects list (it was already expanded when tested).
 - MCP HTTP on a non-local address (Tailscale) and from a remote client.
 - Whether automation works while the Mac's screen is locked.
-- Mac app: sign-in and a voice session through it; the notarized disk image opened on
-  another Mac.
+- Mac app: the notarized disk image opened on another Mac.
 
 **Gaps**
 - `new_chat` exists for ChatGPT/Codex and Cursor; add it for Claude (Chat and Code).
