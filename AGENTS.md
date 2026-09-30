@@ -164,7 +164,8 @@ These were learned by breaking them; keep them unless you have evidence otherwis
   checks, one session at a time (a new connection replaces the old one).
 - Undo window (both voice clients): after the yes, "Sending to Codex in <session>." and
   2 s (`UNDO_SECONDS`) in which "cancel", "stop it" or another NO word stops the send
-  (push-to-talk: hold the key). The user is muted during tool calls, so in the Pipecat
+  (push-to-talk: hold the key); the client then says "Stopped. Nothing was sent." (the
+  Pipecat model does not run after it) or "Sending now.". The user is muted during tool calls, so in the Pipecat
   client `make_undo_listener` sits between STT and the user aggregator with its own VAD
   (Whisper needs VAD events), sends them to the STT only while a window is open, and
   ignores NO words the announcement itself contains (echo). Checked offline 2026-09-30,

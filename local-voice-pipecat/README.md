@@ -113,8 +113,9 @@ Cursor in Code submission review: "run the tests". Should I send it?*, and waits
 
 After a yes, the bot says where it is sending, for example *Sending to Codex in Build
 fixes.*, and waits 2 seconds after saying it (`UNDO_SECONDS`). Saying one of the cancel
-words while it speaks or in those 2 seconds ("cancel", "stop it", "wait") stops the send;
-the model is told what you said. Speech that began in time is transcribed before
+words while it speaks or in those 2 seconds ("cancel", "stop it", "wait") stops the send.
+The client then says *Stopped. Nothing was sent.* (the model is told what you said but
+does not speak until you do); otherwise it says *Sending now.* and sends. Speech that began in time is transcribed before
 deciding, for up to 3 seconds more. You are muted during tool calls, so the
 `UndoListener` between speech recognition and the user aggregator hears these words: it
 runs its own VAD (Whisper transcribes only between VAD events) and ignores a cancel word

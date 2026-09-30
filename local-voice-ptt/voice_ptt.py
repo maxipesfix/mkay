@@ -71,7 +71,8 @@ longer one. If you cannot tell which words are for the agent, ask the user.
 
 Submitting tools (send_message, submit_draft, ask_agent, cursor_answer_question) are confirmed
 with the user by the client before they run, reading the exact text back. If the user declines,
-or stops it just after confirming, acknowledge and do not retry unless asked.
+acknowledge and do not retry unless asked. If they stop it just after confirming, the client
+has already told them nothing was sent: add nothing unless they asked for something else.
 
 If a result has status "error" or an agent_error (for example Cursor's "Invalid API key"), the
 agent did not answer: tell the user the error briefly and do not wait for a reply.
@@ -87,8 +88,10 @@ list_sessions or list_projects return rather than guessing, and ask when unsure.
 YES = re.compile(r"\b(yes|yeah|yep|yup|sure|confirm(ed)?|go ahead|do it|send( it)?|correct|ok(ay)?)\b", re.I)
 NO = re.compile(r"\b(no|not|nope|don'?t|stop|cancel|wait|hold on|undo|never ?mind|abort)\b", re.I)  # checked first
 # After a yes, the client says where it is sending and waits this long after saying it: holding
-# the key then and saying a NO word ("cancel", "stop it") stops the send.
+# the key then and saying a NO word ("cancel", "stop it") stops the send. Either way the client
+# says what it decided.
 UNDO_SECONDS = 2.0
+STOPPED, SENDING = 'Stopped. Nothing was sent.', 'Sending now.'
 
 
 def load_env(path: Path) -> None:
@@ -650,7 +653,10 @@ class Assistant:
             self.io.speak(describe_sending(name, spoken))
             heard = await self.io.undo_window(UNDO_SECONDS)
             if heard and NO.search(heard):
-                return f'The user stopped it right after confirming ("{heard}"); nothing was sent.', True
+                self.io.speak(STOPPED)
+                return (f'The user stopped it right after confirming ("{heard}") and was told "{STOPPED}" '
+                        'Do not say it again: reply with no text unless they asked for something else.'), True
+            self.io.speak(SENDING, wait=False)
         elif name in FILLER:
             self.io.speak(FILLER[name], wait=False)
         print(f'🛠  {name} {json.dumps(args, ensure_ascii=False)}', flush=True)

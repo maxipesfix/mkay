@@ -80,8 +80,8 @@ by the client. The first call returns status "awaiting_confirmation": the client
 exact text back to the user, so say nothing and wait for their answer. If they then say yes,
 call the same tool again with exactly the same arguments; the client checks their answer and
 sends. If they decline, acknowledge briefly and do not retry unless asked. Status "cancelled"
-means they stopped it just after saying yes (their words are in "heard"): say it was not sent,
-and act on anything else they said there.
+means they stopped it just after saying yes and the client told them nothing was sent; their
+words then are in "heard" (they may refer to them next).
 
 If a result has status "error" or an agent_error (for example Cursor's "Invalid API key"), the
 agent did not answer: tell the user the error briefly and do not wait for a reply.
@@ -210,8 +210,9 @@ def session_options(provider: str) -> dict:
 YES = re.compile(r"\b(yes|yeah|yep|yup|sure|confirm(ed)?|go ahead|do it|send( it)?|correct|ok(ay)?)\b", re.I)
 NO = re.compile(r"\b(no|not|nope|don'?t|stop|cancel|wait|hold on|undo|never ?mind|abort)\b", re.I)  # checked first
 # After a yes, the client says where it is sending and waits this long after saying it: a
-# NO word heard meanwhile stops the send.
+# NO word heard meanwhile stops the send. Either way the client says what it decided.
 UNDO_SECONDS = 2.0
+STOPPED, SENDING = 'Stopped. Nothing was sent.', 'Sending now.'
 
 FILLER = {'status': 'Checking.', 'ask_agent': 'Sending it now.', 'wait_for_reply': 'Waiting for the reply.',
           'read_reply': 'Reading it.', 'list_sessions': 'Looking.', 'list_projects': 'Looking.',
@@ -593,13 +594,19 @@ class AgentTools:
             if verdict == 'declined':
                 await params.result_callback({'status': 'declined', 'note': 'The user declined; nothing was sent.'})
                 return
-            if self.undo and (heard := await self.undo.window(lambda: self.speak(params, pending['sending']),
-                                                              pending['sending'], UNDO_SECONDS)):
-                log(f'{name} stopped in the undo window: {said(repr(heard))}')
-                await params.result_callback(
-                    {'status': 'cancelled', 'heard': heard,
-                     'note': 'The user stopped it right after confirming; nothing was sent.'})
-                return
+            if self.undo:
+                heard = await self.undo.window(lambda: self.speak(params, pending['sending']),
+                                               pending['sending'], UNDO_SECONDS)
+                if heard:
+                    log(f'{name} stopped in the undo window: {said(repr(heard))}')
+                    await self.speak(params, STOPPED)
+                    # The client has said so; the model speaks again only when the user does.
+                    await params.result_callback(
+                        {'status': 'cancelled', 'heard': heard,
+                         'note': f'The user stopped it right after confirming and was told "{STOPPED}"'},
+                        properties=FunctionCallResultProperties(run_llm=False))
+                    return
+                await self.speak(params, SENDING)
         elif name in FILLER:
             await self.speak(params, FILLER[name])
         await params.result_callback(await self.run(params, name, args))
