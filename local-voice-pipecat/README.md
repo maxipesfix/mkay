@@ -107,9 +107,18 @@ Before a tool that submits something (`send_message`, `submit_draft`, `ask_agent
 Cursor in Code submission review: "run the tests". Should I send it?*, and waits:
 
 - "yes", "yeah", "go ahead", "send it", "confirm", "OK" confirm;
-- "no", "not", "cancel", "stop", "wait", "never mind" cancel (checked first, so
-  "don't send it" cancels);
+- "no", "not", "cancel", "stop", "wait", "hold on", "undo", "never mind" cancel
+  (checked first, so "don't send it" cancels);
 - anything else is asked again once, then treated as no.
+
+After a yes, the bot says where it is sending, for example *Sending to Codex in Build
+fixes.*, and waits 2 seconds after saying it (`UNDO_SECONDS`). Saying one of the cancel
+words while it speaks or in those 2 seconds ("cancel", "stop it", "wait") stops the send;
+the model is told what you said. Speech that began in time is transcribed before
+deciding, for up to 3 seconds more. You are muted during tool calls, so the
+`UndoListener` between speech recognition and the user aggregator hears these words: it
+runs its own VAD (Whisper transcribes only between VAD events) and ignores a cancel word
+the announcement itself contains, which could be its echo.
 
 This is enforced in the client, not left to the model. The first call to a submitting
 tool only reads the text back. It runs when the model calls it again with exactly the
@@ -246,6 +255,7 @@ learned names in `~/.cache/local-voice-ptt/names.json`, so `../local-voice-ptt/v
 | Speech recognition | Local Whisper | Deepgram or local Whisper |
 | Cutting the bot off | Press the key | Speak |
 | Confirmation | Hold the key and answer | Answer; checked when the model calls the tool again |
+| Stopping a confirmed send | Hold the key within 2 s and say "cancel" | Say "cancel" within 2 s |
 | Reachable from | This Mac's keyboard | A browser; a phone next |
 | Conversation history | Last `VOICE_MAX_TURNS` requests | The whole session (cleared on reconnect) |
 
@@ -291,6 +301,12 @@ Checked on 2026-09-26 (Pipecat 1.12.0, macOS 26.5, Apple M4):
   a yes in the user's own words after the read-back, changed text is read back again,
   "don't send it" cancels, an earlier yes is not reused, and `submit_draft` reads back
   the typed draft.
+- The undo window, offline on 2026-09-30: `UndoListener` in a Pipecat pipeline with
+  simulated bot speech and transcripts (a cancel word during the announcement or within
+  2 s stops the send, other words and silence do not, the announcement's own cancel
+  words are ignored, late speech is waited for, at most 3 s), and with real Silero VAD
+  and Whisper on `say` recordings ("Cancel that, please." stopped it, "Sounds good." did
+  not); `AgentTools.handle` sends nothing when it is stopped. Not yet tried by voice.
 
 First spoken use, 2026-09-26: status, listings in Claude Code and ChatGPT, and opening a
 ChatGPT session worked by voice. Found and fixed there: Japanese names were read as

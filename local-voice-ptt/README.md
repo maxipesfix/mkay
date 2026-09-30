@@ -102,9 +102,14 @@ Code submission review: "run the tests". Should I send it?*, and waits for your
 answer. **Hold the key again** to answer; the prompt says so:
 
 - "yes", "yeah", "go ahead", "send it", "confirm", "OK" confirm;
-- "no", "not", "cancel", "stop", "wait", "never mind" cancel (checked first, so
-  "don't send it" cancels);
+- "no", "not", "cancel", "stop", "wait", "hold on", "undo", "never mind" cancel
+  (checked first, so "don't send it" cancels);
 - anything else is asked again once, then treated as no.
+
+After a yes, the client says where it is sending, for example *Sending to chatgpt in
+Build fixes.*, and waits 2 seconds (`UNDO_SECONDS`): hold the key in that time (or while
+it speaks) and say "cancel", "stop it" or another cancel word, and nothing is sent. With
+`--text`, type it; another line typed then is kept as your next request.
 
 The gated tools are the ones the MCP server marks as submitting, so the list follows
 the server. When you say "send it" after the client typed a draft, the confirmation

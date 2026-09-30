@@ -79,7 +79,9 @@ Submitting tools (send_message, submit_draft, ask_agent, cursor_answer_question)
 by the client. The first call returns status "awaiting_confirmation": the client has read the
 exact text back to the user, so say nothing and wait for their answer. If they then say yes,
 call the same tool again with exactly the same arguments; the client checks their answer and
-sends. If they decline, acknowledge briefly and do not retry unless asked.
+sends. If they decline, acknowledge briefly and do not retry unless asked. Status "cancelled"
+means they stopped it just after saying yes (their words are in "heard"): say it was not sent,
+and act on anything else they said there.
 
 If a result has status "error" or an agent_error (for example Cursor's "Invalid API key"), the
 agent did not answer: tell the user the error briefly and do not wait for a reply.
@@ -206,7 +208,10 @@ def session_options(provider: str) -> dict:
 
 
 YES = re.compile(r"\b(yes|yeah|yep|yup|sure|confirm(ed)?|go ahead|do it|send( it)?|correct|ok(ay)?)\b", re.I)
-NO = re.compile(r"\b(no|not|nope|don'?t|stop|cancel|wait|never ?mind|abort)\b", re.I)  # checked first
+NO = re.compile(r"\b(no|not|nope|don'?t|stop|cancel|wait|hold on|undo|never ?mind|abort)\b", re.I)  # checked first
+# After a yes, the client says where it is sending and waits this long after saying it: a
+# NO word heard meanwhile stops the send.
+UNDO_SECONDS = 2.0
 
 FILLER = {'status': 'Checking.', 'ask_agent': 'Sending it now.', 'wait_for_reply': 'Waiting for the reply.',
           'read_reply': 'Reading it.', 'list_sessions': 'Looking.', 'list_projects': 'Looking.',
@@ -257,17 +262,25 @@ VIEW_NAMES = {('claude', 'chat'): 'Claude Chat', ('claude', 'code'): 'Claude Cod
               ('cursor', 'agents'): "Cursor's Agents window", ('cursor', 'ide'): "Cursor's IDE"}
 
 
+def spoken_app(args: dict) -> str:
+    """The app as read-backs name it: in its current view (_view) when known."""
+    return VIEW_NAMES.get((args.get('app'), args.get('_view'))) or APP_NAMES.get(args.get('app'), args.get('app'))
+
+
+def spoken_place(args: dict) -> str:
+    """Where in the app a message goes, as read-backs say it after the app's name."""
+    if args.get('new_chat'):
+        return ' as a new chat' + (f" in {args['project']}" if args.get('project') else '')
+    if args.get('session'):
+        return f" in {args['session']}"
+    return ', in the chat that is open now'
+
+
 def describe_submission(name: str, args: dict) -> str:
     """The read-back: exactly what will be sent, and where (with the app's view in _view)."""
-    app = VIEW_NAMES.get((args.get('app'), args.get('_view'))) or APP_NAMES.get(args.get('app'), args.get('app'))
+    app = spoken_app(args)
     if name in ('send_message', 'ask_agent'):
-        if args.get('new_chat'):
-            where = ' as a new chat' + (f" in {args['project']}" if args.get('project') else '')
-        elif args.get('session'):
-            where = f" in {args['session']}"
-        else:
-            where = ', in the chat that is open now'
-        return f'Send to {app}{where}: "{args.get("message") or args.get("text")}". Should I send it?'
+        return f'Send to {app}{spoken_place(args)}: "{args.get("message") or args.get("text")}". Should I send it?'
     if name == 'submit_draft':
         if args.get('_draft'):
             return f'Send to {app}: "{args["_draft"]}". Should I send it?'
@@ -276,6 +289,18 @@ def describe_submission(name: str, args: dict) -> str:
         extra = f', with "{args["text"]}"' if args.get('text') else ''
         return f'Answer Cursor with option {args.get("letter")}{extra}. Confirm?'
     return f'Run {name.replace("_", " ")} on {app}. Confirm?'
+
+
+def describe_sending(name: str, args: dict) -> str:
+    """Said after the yes, before the undo window: where it goes, not the text again."""
+    app = spoken_app(args)
+    if name in ('send_message', 'ask_agent'):
+        return f'Sending to {app}{spoken_place(args)}.'
+    if name == 'submit_draft':
+        return f'Sending the draft in {app}.'
+    if name == 'cursor_answer_question':
+        return f'Answering Cursor with option {args.get("letter")}.'
+    return f'Running {name.replace("_", " ")} on {app}.'
 
 
 class Names:
@@ -498,7 +523,9 @@ class AgentTools:
     tool only reads the exact text back and returns "awaiting_confirmation". The tool runs
     when the model calls it again with the same arguments and the user's own words since
     the read-back (user messages in the context, which only speech recognition writes)
-    say yes and not no. A no, or no clear answer after two read-backs, cancels it.
+    say yes and not no. A no, or no clear answer after two read-backs, cancels it. After
+    the yes, the client says where it is sending and a NO word within UNDO_SECONDS after
+    that stops it (heard by the UndoListener, since the user is muted during tool calls).
     """
 
     def __init__(self, mcp_client, tools, names: Names | None = None):
@@ -512,7 +539,7 @@ class AgentTools:
         """Forget per-session state (a new browser connection starts a new conversation)."""
         self.drafts: dict[str, str] = {}  # Text this client typed into each app, for read-back.
         self.pending: dict | None = None  # Submission awaiting the user's yes.
-        self.worker = self.runner = None
+        self.worker = self.runner = self.undo = None
 
     def schemas(self):
         from pipecat.adapters.schemas.function_schema import FunctionSchema
@@ -554,6 +581,7 @@ class AgentTools:
             await params.result_callback({'status': 'error', 'error': problem, 'note': 'Nothing was sent or read back.'})
             return
         if name in self.submitting:
+            pending = self.pending  # What was read back, if this call answers it.
             verdict = await self.confirm(params, name, args)
             if verdict == 'ask':
                 await params.result_callback(
@@ -564,6 +592,13 @@ class AgentTools:
                 return
             if verdict == 'declined':
                 await params.result_callback({'status': 'declined', 'note': 'The user declined; nothing was sent.'})
+                return
+            if self.undo and (heard := await self.undo.window(lambda: self.speak(params, pending['sending']),
+                                                              pending['sending'], UNDO_SECONDS)):
+                log(f'{name} stopped in the undo window: {said(repr(heard))}')
+                await params.result_callback(
+                    {'status': 'cancelled', 'heard': heard,
+                     'note': 'The user stopped it right after confirming; nothing was sent.'})
                 return
         elif name in FILLER:
             await self.speak(params, FILLER[name])
@@ -602,7 +637,7 @@ class AgentTools:
         spoken['_view'] = view = await self.current_view(args.get('app'))
         read_back = describe_submission(name, spoken)
         self.pending = {'name': name, 'args': args, 'read_back': read_back, 'asks': 1, 'view': view,
-                        'index': len(params.context.get_messages())}
+                        'sending': describe_sending(name, spoken), 'index': len(params.context.get_messages())}
         await self.speak(params, prefix + read_back)
         return 'ask'
 
@@ -698,6 +733,109 @@ def audio_watch(silence_seconds: float = 3.0):
                         'the tab was suspended. Disconnect and Connect on the page to recover.')
 
     return AudioWatch()
+
+
+def make_undo_listener():
+    """A processor between STT and the user aggregator that hears the user stop a confirmed
+    send in its undo window (AgentTools.handle calls its window()).
+
+    The window falls inside the tool call, while the user is muted: the user aggregator
+    drops transcripts and stops running its VAD, so Whisper, which transcribes only between
+    VAD events, would hear nothing, and nothing the user says can interrupt the call or run
+    the LLM. This processor runs its own VAD, sends its speech events up to the STT while
+    a window is open, and checks the transcripts for a NO word.
+    """
+    from pipecat.audio.vad.silero import SileroVADAnalyzer
+    from pipecat.audio.vad.vad_controller import VADController
+    from pipecat.frames.frames import (BotStartedSpeakingFrame, BotStoppedSpeakingFrame, InputAudioRawFrame,
+                                       InterimTranscriptionFrame, TranscriptionFrame,
+                                       VADUserStartedSpeakingFrame, VADUserStoppedSpeakingFrame)
+    from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+
+    class UndoListener(FrameProcessor):
+        def __init__(self):
+            super().__init__()
+            self.analyzer = SileroVADAnalyzer()
+            self.vad = VADController(self.analyzer)
+            self.vad.add_event_handler('on_speech_started', self.on_speech_started)
+            self.vad.add_event_handler('on_speech_stopped', self.on_speech_stopped)
+            self.listening = self.user_speaking = self.bot_speaking = False
+            self.stopped_at = self.final_at = 0.0  # time.monotonic() of the last speech stop, final transcript
+            self.echo: set[str] = set()  # NO words in the announcement, which may come back as echo
+            self.stop_words: str | None = None
+
+        async def setup(self, setup):
+            await super().setup(setup)
+            await self.vad.setup(setup)
+
+        async def cleanup(self):
+            await super().cleanup()
+            await self.vad.cleanup()
+
+        async def on_speech_started(self, controller):
+            self.user_speaking = True
+            if self.listening:
+                await self.push_frame(VADUserStartedSpeakingFrame(start_secs=self.analyzer.params.start_secs),
+                                      FrameDirection.UPSTREAM)
+
+        async def on_speech_stopped(self, controller):
+            self.user_speaking = False
+            self.stopped_at = time.monotonic()
+            if self.listening:
+                await self.push_frame(VADUserStoppedSpeakingFrame(stop_secs=self.analyzer.params.stop_secs),
+                                      FrameDirection.UPSTREAM)
+
+        async def process_frame(self, frame, direction):
+            await super().process_frame(frame, direction)
+            if isinstance(frame, InputAudioRawFrame):
+                await self.vad.process_frame(frame)
+            elif isinstance(frame, BotStartedSpeakingFrame):
+                self.bot_speaking = True
+            elif isinstance(frame, BotStoppedSpeakingFrame):
+                self.bot_speaking = False
+            elif isinstance(frame, (TranscriptionFrame, InterimTranscriptionFrame)):
+                if isinstance(frame, TranscriptionFrame):
+                    self.final_at = time.monotonic()
+                if self.listening and self.stop_words is None:
+                    if any(m.group(0).lower() not in self.echo for m in NO.finditer(frame.text)):
+                        self.stop_words = frame.text
+            await self.push_frame(frame, direction)
+
+        def undecided(self) -> bool:
+            """The user is speaking, or stopped and their words are not transcribed yet."""
+            return self.user_speaking or self.final_at < self.stopped_at
+
+        async def window(self, speak, announcement: str, seconds: float) -> str | None:
+            """Say the announcement with speak(), listen while it plays and for seconds after,
+            and return the words that stopped the send, or None to send it. Speech that began
+            in time is transcribed before deciding, for up to 3 seconds more."""
+            loop = asyncio.get_running_loop()
+            self.echo, self.stop_words = {m.group(0).lower() for m in NO.finditer(announcement)}, None
+            self.listening = True
+            if self.user_speaking:  # Speaking already: Whisper needs the segment's start.
+                await self.push_frame(VADUserStartedSpeakingFrame(start_secs=self.analyzer.params.start_secs),
+                                      FrameDirection.UPSTREAM)
+            try:
+                await speak()
+                started = loop.time()
+                # The announcement starts playing within a few seconds (a cloud voice's first
+                # audio, Kokoro's synthesis) and plays until the bot stops speaking.
+                while not self.bot_speaking and loop.time() - started < 5 and self.stop_words is None:
+                    await asyncio.sleep(0.05)
+                while self.bot_speaking and loop.time() - started < 20 and self.stop_words is None:
+                    await asyncio.sleep(0.05)
+                deadline = loop.time() + seconds
+                while self.stop_words is None and (loop.time() < deadline or
+                                                   (self.undecided() and loop.time() < deadline + 3)):
+                    await asyncio.sleep(0.05)
+                return self.stop_words
+            finally:
+                self.listening = False
+                if self.user_speaking:  # Close the STT's segment; the muted aggregator drops its words.
+                    await self.push_frame(VADUserStoppedSpeakingFrame(stop_secs=self.analyzer.params.stop_secs),
+                                          FrameDirection.UPSTREAM)
+
+    return UndoListener()
 
 
 def spoken_words(text: str) -> list[str]:
@@ -907,13 +1045,13 @@ async def run_bot(transport, agent_tools: AgentTools, provider: str, *, echo_gua
             user_mute_strategies=[FunctionCallUserMuteStrategy()],
             user_turn_strategies=UserTurnStrategies(start=[guard_start]) if echo_guard else None))
 
-    watch = audio_watch()
-    pipeline = Pipeline([transport.input(), watch, stt, user_aggregator, llm, tts, transport.output(),
+    watch, undo = audio_watch(), make_undo_listener()
+    pipeline = Pipeline([transport.input(), watch, stt, undo, user_aggregator, llm, tts, transport.output(),
                          *([bot_words] if echo_guard else []), assistant_aggregator])
     worker = PipelineWorker(pipeline, params=PipelineParams(enable_metrics=True),
                             idle_timeout_secs=IDLE_MINUTES * 60, cancel_on_idle_timeout=False)
     runner = WorkerRunner(handle_sigint=False)
-    agent_tools.worker, agent_tools.runner = worker, runner
+    agent_tools.worker, agent_tools.runner, agent_tools.undo = worker, runner, undo
     await runner.add_workers(worker)
 
     @user_aggregator.event_handler('on_user_turn_message_added')
@@ -949,7 +1087,7 @@ async def run_bot(transport, agent_tools: AgentTools, provider: str, *, echo_gua
         await runner.run()
     finally:
         watcher.cancel()
-        agent_tools.worker = agent_tools.runner = None
+        agent_tools.worker = agent_tools.runner = agent_tools.undo = None
 
 
 LOCAL_USER = 'local'

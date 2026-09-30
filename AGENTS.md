@@ -162,6 +162,13 @@ These were learned by breaking them; keep them unless you have evidence otherwis
   answered lookups from the full list, and read all names when asked (checked 2026-09-27).
 - Code-enforced spoken confirmation; own FastAPI server on 127.0.0.1 with Host/Origin
   checks, one session at a time (a new connection replaces the old one).
+- Undo window (both voice clients): after the yes, "Sending to Codex in <session>." and
+  2 s (`UNDO_SECONDS`) in which "cancel", "stop it" or another NO word stops the send
+  (push-to-talk: hold the key). The user is muted during tool calls, so in the Pipecat
+  client `make_undo_listener` sits between STT and the user aggregator with its own VAD
+  (Whisper needs VAD events), sends them to the STT only while a window is open, and
+  ignores NO words the announcement itself contains (echo). Checked offline 2026-09-30,
+  including real Silero VAD and Whisper on `say` recordings.
 - Importable: `create_app` takes `open_tools(user)` and `authorize(request)` hooks,
   so a server can give each user's session its own MCP connection (the local entry
   point serves one local user, as before). `run_bot(transport, ...)` takes any Pipecat
@@ -217,6 +224,7 @@ These were learned by breaking them; keep them unless you have evidence otherwis
   ElevenLabs and Kokoro voice (ElevenLabs: a spoken session, barge-in).
 - Pipecat client: a longer spoken conversation after the event-loop fix, barge-in,
   and a send through it (read-only tools and opening a session worked by voice).
+- The undo window by voice, in both clients, with Deepgram and Whisper (offline checks only).
 - Pipecat client with Deepgram and Fish: a spoken conversation (only the greeting was
   checked), Japanese recognition (`VOICE_STT_LANGUAGE=ja` or `multi`) and Fish reading
   Japanese names.

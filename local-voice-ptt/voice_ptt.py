@@ -71,7 +71,7 @@ longer one. If you cannot tell which words are for the agent, ask the user.
 
 Submitting tools (send_message, submit_draft, ask_agent, cursor_answer_question) are confirmed
 with the user by the client before they run, reading the exact text back. If the user declines,
-acknowledge and do not retry unless asked.
+or stops it just after confirming, acknowledge and do not retry unless asked.
 
 If a result has status "error" or an agent_error (for example Cursor's "Invalid API key"), the
 agent did not answer: tell the user the error briefly and do not wait for a reply.
@@ -85,7 +85,10 @@ list_sessions or list_projects return rather than guessing, and ask when unsure.
 """
 
 YES = re.compile(r"\b(yes|yeah|yep|yup|sure|confirm(ed)?|go ahead|do it|send( it)?|correct|ok(ay)?)\b", re.I)
-NO = re.compile(r"\b(no|not|nope|don'?t|stop|cancel|wait|never ?mind|abort)\b", re.I)  # checked first
+NO = re.compile(r"\b(no|not|nope|don'?t|stop|cancel|wait|hold on|undo|never ?mind|abort)\b", re.I)  # checked first
+# After a yes, the client says where it is sending and waits this long after saying it: holding
+# the key then and saying a NO word ("cancel", "stop it") stops the send.
+UNDO_SECONDS = 2.0
 
 
 def load_env(path: Path) -> None:
@@ -319,6 +322,18 @@ class Voice:
         print(f'🗣  {text or "(nothing recognized)"}', flush=True)
         return text
 
+    async def undo_window(self, seconds: float) -> str | None:
+        """Right after a send is announced: what the user says if they press the key within
+        seconds (pressing it during the announcement counts too), else None."""
+        print(f'(Hold {self.key.name.replace("_", " ")} within {seconds:.0f} s and say "cancel" to stop it.)',
+              flush=True)
+        deadline = time.time() + seconds
+        while time.time() < deadline:
+            if self.key.down():
+                return await self.listen()
+            await asyncio.sleep(0.02)
+        return None
+
 
 class TextIO:
     """--text mode: typed input, printed output."""
@@ -333,9 +348,31 @@ class TextIO:
         pass
 
     queue: asyncio.Queue | None = None
+    held: tuple = ()  # A line typed in an undo window that did not stop the send: the next input.
 
     async def listen(self, prompt: str = '') -> str | None:
         print((prompt + '\n' if prompt else '') + 'you> ', end='', flush=True)
+        if self.held:
+            (line,), self.held = self.held, ()
+            print(line if line is not None else '', flush=True)
+            return line
+        return await self.lines().get()
+
+    async def undo_window(self, seconds: float) -> str | None:
+        """Right after a send is announced: a line typed within seconds if it stops the send
+        (other lines are kept as the next input), else None."""
+        print(f'(Type "cancel" within {seconds:.0f} s to stop it.)', flush=True)
+        try:
+            line = await asyncio.wait_for(self.lines().get(), seconds)
+        except asyncio.TimeoutError:
+            return None
+        if line is not None and NO.search(line):
+            return line
+        self.held = (line,)
+        return None
+
+    def lines(self) -> asyncio.Queue:
+        """Typed lines (None at the end of input)."""
         if self.queue is None:
             # Read stdin on a daemon thread: a thread blocked in input() inside asyncio's
             # executor would stop asyncio.run from finishing on Ctrl-C.
@@ -344,11 +381,10 @@ class TextIO:
 
             def reader():
                 for line in sys.stdin:
-                    loop.call_soon_threadsafe(queue.put_nowait, line.rstrip('\n'))
+                    loop.call_soon_threadsafe(queue.put_nowait, line.strip())
                 loop.call_soon_threadsafe(queue.put_nowait, None)  # End of input: quit.
             threading.Thread(target=reader, daemon=True).start()
-        line = await self.queue.get()
-        return None if line is None else line.strip()
+        return self.queue
 
 
 # LLM providers and the tool loop
@@ -376,6 +412,22 @@ def describe_submission(name: str, args: dict) -> str:
         extra = f', with "{args["text"]}"' if args.get('text') else ''
         return f'Answer Cursor with option {args.get("letter")}{extra}. Confirm?'
     return f'Run {name.replace("_", " ")} on {app}. Confirm?'
+
+
+def describe_sending(name: str, args: dict) -> str:
+    """Said after the yes, before the undo window: where it goes, not the text again."""
+    app = args.get('app', 'Cursor')
+    if name in ('send_message', 'ask_agent'):
+        if args.get('new_chat'):
+            where = ' as a new chat' + (f" in {args['project']}" if args.get('project') else '')
+        else:
+            where = f" in {args['session']}" if args.get('session') else ''
+        return f'Sending to {app}{where}.'
+    if name == 'submit_draft':
+        return f'Sending the draft in {app}.'
+    if name == 'cursor_answer_question':
+        return f'Answering Cursor with option {args.get("letter")}.'
+    return f'Running {name.replace("_", " ")} on {app}.'
 
 
 class LLMError(Exception):
@@ -592,9 +644,14 @@ class Assistant:
         spoken = dict(args)
         if name == 'submit_draft' and args.get('app') in self.drafts:
             spoken['_draft'] = self.drafts[args['app']]  # Read back what will actually be sent.
-        if name in self.submitting and not await self.confirm(name, spoken):
-            return 'The user declined; nothing was sent.', True
-        if name in FILLER:
+        if name in self.submitting:
+            if not await self.confirm(name, spoken):
+                return 'The user declined; nothing was sent.', True
+            self.io.speak(describe_sending(name, spoken))
+            heard = await self.io.undo_window(UNDO_SECONDS)
+            if heard and NO.search(heard):
+                return f'The user stopped it right after confirming ("{heard}"); nothing was sent.', True
+        elif name in FILLER:
             self.io.speak(FILLER[name], wait=False)
         print(f'🛠  {name} {json.dumps(args, ensure_ascii=False)}', flush=True)
         started = time.time()
