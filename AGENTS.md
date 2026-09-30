@@ -179,6 +179,12 @@ These were learned by breaking them; keep them unless you have evidence otherwis
 - Cloud speech: Deepgram (keyterms from learned names, model-improvement opt-out) and
   Fish Audio when their keys are set, else local Whisper and Kokoro (`VOICE_STT`,
   `VOICE_TTS`); a cloud-speech session uses ~160 MB and ~10% of a core when idle.
+- ElevenLabs voices (five premade: Eric, Sarah, Jessica, Alice, George) spoken by Eleven v4
+  Turbo when `ELEVENLABS_API_KEY` is set. v4 Turbo is served only by the Text-to-Dialogue
+  WebSocket, so it uses Pipecat's `ElevenLabsDialogueTTSService` (its "requires an
+  eleven_v3 model" warning predates v4 and is filtered). It reads hiragana in English
+  sentences, so no romaji prompt. Checked 2026-09-30 through `make_tts` (0.4–0.5 s to first
+  audio; a transcript of its audio had "Sobatomo") and in `/options`.
 - Checked 2026-09-26: tools and schemas, Host/Origin refusals, a browser session
   starting and speaking, reconnect and Ctrl-C, and the confirmation gate offline; first
   spoken use (status, listings, opening a session). The Whisper event-loop fix is
@@ -207,8 +213,8 @@ These were learned by breaking them; keep them unless you have evidence otherwis
 ## TODO
 
 **Not yet verified live**
-- Local page: a session with Whisper and Kokoro chosen from the menus, and with every Fish
-  and Kokoro voice.
+- Local page: a session with Whisper and Kokoro chosen from the menus, and with every Fish,
+  ElevenLabs and Kokoro voice (ElevenLabs: a spoken session, barge-in).
 - Pipecat client: a longer spoken conversation after the event-loop fix, barge-in,
   and a send through it (read-only tools and opening a session worked by voice).
 - Pipecat client with Deepgram and Fish: a spoken conversation (only the greeting was

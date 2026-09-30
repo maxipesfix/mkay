@@ -12,14 +12,14 @@ on [Pipecat](https://github.com/pipecat-ai/pipecat) 1.12.
 browser (mic, speaker, echo cancellation)
    ⇅ WebRTC audio
 voice_pipecat.py on this Mac:
-   Silero VAD + Smart Turn → Deepgram or Whisper → OpenAI or Claude API → Cartesia, Fish or Kokoro → browser
+   Silero VAD + Smart Turn → Deepgram or Whisper → OpenAI or Claude API → Cartesia, ElevenLabs, Fish or Kokoro → browser
                                                     ⇅ tool calls
                                          agent_mcp.py (stdio) → apps
 ```
 
 The browser is the microphone and speaker even on this Mac: its echo cancellation
 keeps the bot from hearing its own voice, which a plain microphone stream would not.
-Speech recognition and speech synthesis use cloud APIs (Deepgram; Cartesia or Fish Audio) when
+Speech recognition and speech synthesis use cloud APIs (Deepgram; Cartesia, ElevenLabs or Fish Audio) when
 their keys are set, and local models (Whisper, Kokoro) otherwise. The cloud services
 make a session light: no models to load, about 160 MB of memory and 10% of one core for a
 connected session, where the local models need about 1.5–2 cores while working.
@@ -32,7 +32,8 @@ The same page is meant to be opened from a phone next (see [Next: the phone](#ne
    [`../multi-agent-cli`](../multi-agent-cli/README.md)).
 2. Copy `.env.example` to `.env` and set the key for your provider: `OPENAI_API_KEY`
    (default) or `ANTHROPIC_API_KEY` with `VOICE_PROVIDER=anthropic`. For cloud speech,
-   also set `DEEPGRAM_API_KEY` and `FISH_API_KEY`. `.env` is git-ignored.
+   also set `DEEPGRAM_API_KEY` and a voice's key (`CARTESIA_API_KEY`,
+   `ELEVENLABS_API_KEY` or `FISH_API_KEY`). `.env` is git-ignored.
 3. The terminal that runs it needs **Accessibility** access (System Settings > Privacy &
    Security), which the MCP server uses to drive the apps. The microphone permission
    belongs to the browser, not the terminal, and no Input Monitoring is needed.
@@ -59,8 +60,8 @@ Under the circle, three menus choose the services for the next session (the brow
 remembers them); they list only what this Mac can use:
 
 - **Listening:** Deepgram when `DEEPGRAM_API_KEY` is set; Whisper on this Mac always.
-- **Voice:** Cartesia's and Fish Audio's voices when their keys are set; Kokoro's voices
-  on this Mac always.
+- **Voice:** Cartesia's, ElevenLabs' (Eleven v4 Turbo) and Fish Audio's voices when their
+  keys are set; Kokoro's voices on this Mac always.
 - **Model:** OpenAI and Claude when their keys are set, and every model of a local LLM
   server that is running: LM Studio (port 1234), Ollama (11434), or `VOICE_LOCAL_LLM_URL`.
 
@@ -195,7 +196,7 @@ cd local-voice-pipecat/client && npm ci && npm run build
 - **Japanese names:** with Kokoro and Cartesia, the model is told to say names in
   non-Latin scripts in romaji (そばとも as "Sobatomo"); tool arguments keep the exact
   title. Kokoro speaks English only, and Cartesia's sonic-3.6 silently skips hiragana in
-  an English sentence. Fish reads them as written. For Japanese speech recognition, set
+  an English sentence. Fish and ElevenLabs v4 read them as written. For Japanese speech recognition, set
   `VOICE_STT_LANGUAGE=ja` or `multi`.
 - **The bot does not answer:** the terminal shows the error; an invalid API key shows
   as `HTTP 401` from the LLM service, and the session stops.
@@ -213,10 +214,11 @@ Set in `.env` (see `.env.example`):
 | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | — | The key for the chosen provider |
 | `VOICE_MODEL` | `gpt-5.5` (OpenAI), `claude-opus-5` (Claude) | Model that picks the tools |
 | `VOICE_EFFORT` | `low` | Reasoning effort |
-| `DEEPGRAM_API_KEY`, `FISH_API_KEY` | — | Keys for cloud speech |
+| `DEEPGRAM_API_KEY`, `CARTESIA_API_KEY`, `ELEVENLABS_API_KEY`, `FISH_API_KEY` | — | Keys for cloud speech |
 | `VOICE_STT` | `deepgram` if its key is set, else `whisper` | Speech-to-text service |
-| `VOICE_TTS` | `cartesia` if its key is set, else `fish` if its key is set, else `kokoro` | Text-to-speech service |
+| `VOICE_TTS` | `cartesia` if its key is set, else `fish`, else `elevenlabs`, whichever key is set; else `kokoro` | Text-to-speech service |
 | `VOICE_CARTESIA_VOICE`, `VOICE_CARTESIA_MODEL` | `daniel`, `sonic-3.6` | Cartesia voice (`daniel`, `skylar`, `jacqueline`, `gemma`, `archie`, or a voice ID) and model |
+| `VOICE_ELEVENLABS_VOICE`, `VOICE_ELEVENLABS_MODEL` | `eric`, `eleven_v4_turbo` | ElevenLabs voice (`eric`, `sarah`, `jessica`, `alice`, `george`, or a voice ID) and model; spoken over the Text-to-Dialogue WebSocket, the only one serving Eleven v4 |
 | `VOICE_STT_MODEL` | `nova-3-general` (Deepgram), `small.en` (Whisper) | Speech-to-text model |
 | `VOICE_STT_LANGUAGE` | `en` | Deepgram language: a code such as `ja`, or `multi` |
 | `VOICE_FISH_VOICE`, `VOICE_FISH_MODEL` | `sarah`, `s2.1-pro` | Fish Audio voice (`sarah`, `hannah`, `ethan`, `adrian`, or a model ID from fish.audio) and model |
@@ -240,7 +242,7 @@ learned names in `~/.cache/local-voice-ptt/names.json`, so `../local-voice-ptt/v
 | | `local-voice-ptt` | `local-voice-pipecat` |
 | --- | --- | --- |
 | Turn taking | Hold a key | Voice activity detection and Smart Turn |
-| Audio | Mac microphone, `say` | Browser over WebRTC; Fish or Kokoro |
+| Audio | Mac microphone, `say` | Browser over WebRTC; Cartesia, ElevenLabs, Fish or Kokoro |
 | Speech recognition | Local Whisper | Deepgram or local Whisper |
 | Cutting the bot off | Press the key | Speak |
 | Confirmation | Hold the key and answer | Answer; checked when the model calls the tool again |
@@ -255,7 +257,7 @@ learned names in `~/.cache/local-voice-ptt/names.json`, so `../local-voice-ptt/v
 | Web page (`static/`, built from `client/`) | `@pipecat-ai/client-js`, `@pipecat-ai/small-webrtc-transport`; the waveform from Pipecat's `voice-ui-kit` | BSD-2-Clause (see `static/talk.js.LEGAL.txt`) |
 | Turn detection | Silero VAD, Smart Turn v3 (bundled with Pipecat) | MIT, BSD-2-Clause |
 | Speech recognition | Deepgram API (`deepgram-sdk`, MIT); local `faster-whisper` with Systran's converted Whisper models | Service terms; MIT |
-| Speech | Cartesia and Fish Audio APIs; local `kokoro-onnx` with the Kokoro-82M model | Service terms; MIT, Apache-2.0 |
+| Speech | Cartesia, ElevenLabs and Fish Audio APIs; local `kokoro-onnx` with the Kokoro-82M model | Service terms; MIT, Apache-2.0 |
 | LLM and tools | `openai` (Apache-2.0), `anthropic` (MIT), `mcp` (MIT) | Apache-2.0 and MIT |
 | Web server | `fastapi`, `uvicorn` | MIT, BSD-3-Clause |
 

@@ -2,7 +2,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#   "pipecat-ai[webrtc,runner,silero,whisper,kokoro,deepgram,fish,cartesia,openai,anthropic]==1.12.0",
+#   "pipecat-ai[webrtc,runner,silero,whisper,kokoro,deepgram,fish,cartesia,elevenlabs,openai,anthropic]==1.12.0",
 #   "mcp>=2.2,<3",
 # ]
 # ///
@@ -94,7 +94,8 @@ list_sessions or list_projects return rather than guessing, and ask when unsure.
 
 # Added to the system prompt for engines that speak our English voices only: Kokoro, and
 # Cartesia, whose sonic-3.6 (Pipecat 1.12's default) silently skips hiragana in English
-# ("The first one is そばとも" came out as "The first one is"). Fish reads it as written.
+# ("The first one is そばとも" came out as "The first one is"). Fish and ElevenLabs v4 read
+# it as written.
 ENGLISH_ONLY_ENGINES = ('kokoro', 'cartesia')
 ENGLISH_ONLY_SPEECH = """
 Your speech engine can only pronounce English. Write every name or phrase in Japanese or
@@ -104,7 +105,7 @@ tools returned, in its original script.
 """
 
 # Speech services: cloud by default when their key is set, local otherwise.
-STT_KINDS, TTS_KINDS = ('deepgram', 'whisper'), ('cartesia', 'fish', 'kokoro')
+STT_KINDS, TTS_KINDS = ('deepgram', 'whisper'), ('cartesia', 'elevenlabs', 'fish', 'kokoro')
 # Fish Audio's own ("Fish Official") English voices suited to an assistant:
 # key -> (name, model ID, description).
 FISH_VOICES = {
@@ -124,6 +125,16 @@ CARTESIA_VOICES = {
     'archie': ('Archie', 'ef191366-f52f-447a-a398-ed8c0f2943a1', 'male, British'),
 }
 CARTESIA_DEFAULT_VOICE = 'daniel'
+# ElevenLabs' premade voices (every account has them) suited to an assistant, spoken by
+# Eleven v4 Turbo: key -> (name, voice ID, description).
+ELEVENLABS_VOICES = {
+    'eric': ('Eric', 'cjVigY5qzO86Huf0OWal', 'male, American, smooth'),
+    'sarah': ('Sarah', 'EXAVITQu4vr4xnSDxMaL', 'female, American, reassuring'),
+    'jessica': ('Jessica', 'cgSgspJ2msm6clMCkdW9', 'female, American, bright'),
+    'alice': ('Alice', 'Xb7hH8MSUJpSbSDYk0k2', 'female, British, clear'),
+    'george': ('George', 'JBFqnCBsd6RMkjVDRZzb', 'male, British, warm'),
+}
+ELEVENLABS_DEFAULT_VOICE = 'eric'
 # Kokoro voices that run on this Mac: key -> (name, Kokoro voice, description).
 KOKORO_VOICES = {
     'heart': ('Heart', 'af_heart', 'female, American'),
@@ -136,6 +147,7 @@ KOKORO_DEFAULT_VOICE = 'heart'
 # Engine -> (display name, API key variable or None for local, voices, default voice).
 TTS_ENGINES = {
     'cartesia': ('Cartesia', 'CARTESIA_API_KEY', CARTESIA_VOICES, CARTESIA_DEFAULT_VOICE),
+    'elevenlabs': ('ElevenLabs v4', 'ELEVENLABS_API_KEY', ELEVENLABS_VOICES, ELEVENLABS_DEFAULT_VOICE),
     'fish': ('Fish Audio', 'FISH_API_KEY', FISH_VOICES, FISH_DEFAULT_VOICE),
     'kokoro': ('Kokoro, on this Mac', None, KOKORO_VOICES, KOKORO_DEFAULT_VOICE),
 }
@@ -148,7 +160,8 @@ LOCAL_LLM_SERVERS = (('LM Studio', 'http://127.0.0.1:1234/v1'), ('Ollama', 'http
 def speech_services() -> tuple[str, str]:
     stt = os.environ.get('VOICE_STT') or ('deepgram' if os.environ.get('DEEPGRAM_API_KEY') else 'whisper')
     tts = os.environ.get('VOICE_TTS') or ('cartesia' if os.environ.get('CARTESIA_API_KEY') else
-                                          'fish' if os.environ.get('FISH_API_KEY') else 'kokoro')
+                                          'fish' if os.environ.get('FISH_API_KEY') else
+                                          'elevenlabs' if os.environ.get('ELEVENLABS_API_KEY') else 'kokoro')
     return stt.lower(), tts.lower()
 
 
@@ -372,6 +385,15 @@ def make_tts(kind: str, voice: str | None = None):
             settings=CartesiaTTSService.Settings(
                 voice=named_voice(voice or os.environ.get('VOICE_CARTESIA_VOICE') or CARTESIA_DEFAULT_VOICE, CARTESIA_VOICES),
                 **({'model': os.environ['VOICE_CARTESIA_MODEL']} if os.environ.get('VOICE_CARTESIA_MODEL') else {})))
+    if kind == 'elevenlabs':
+        # Eleven v4 Turbo is served only by the Text-to-Dialogue WebSocket, which Pipecat 1.12
+        # reaches with this service (its warning that it wants eleven_v3 predates v4 and is filtered).
+        from pipecat.services.elevenlabs.dialogue.tts import ElevenLabsDialogueTTSService
+        return ElevenLabsDialogueTTSService(
+            api_key=os.environ['ELEVENLABS_API_KEY'],
+            settings=ElevenLabsDialogueTTSService.Settings(
+                voice=named_voice(voice or os.environ.get('VOICE_ELEVENLABS_VOICE') or ELEVENLABS_DEFAULT_VOICE, ELEVENLABS_VOICES),
+                model=os.environ.get('VOICE_ELEVENLABS_MODEL') or 'eleven_v4_turbo'))
     if kind == 'fish':
         from pipecat.services.fish.tts import FishAudioTTSService
         return FishAudioTTSService(
@@ -779,8 +801,10 @@ def make_echo_guard(min_words: int = 3, tail_seconds: float = 1.0, echo_seconds:
 
 
 def quiet_pipecat_audio_timeouts(record) -> bool:
-    """Loguru filter: audio_watch reports input gaps once instead of every 2 seconds."""
-    return 'No audio frame received within the specified time' not in record['message']
+    """Loguru filter: audio_watch reports input gaps once instead of every 2 seconds. Also drops
+    Pipecat 1.12's warning that Text-to-Dialogue needs eleven_v3, written before Eleven v4."""
+    return ('No audio frame received within the specified time' not in record['message']
+            and 'Text-to-Dialogue requires an eleven_v3 model, got \'eleven_v4' not in record['message'])
 
 
 def make_llm(provider: str, prompt: str, model: str | None = None):
@@ -1134,7 +1158,8 @@ def main() -> int:
         if kind not in kinds:
             print(f'{variable} must be one of: {", ".join(kinds)}.', file=sys.stderr)
             return 2
-    for kind, key in (('deepgram', 'DEEPGRAM_API_KEY'), ('cartesia', 'CARTESIA_API_KEY'), ('fish', 'FISH_API_KEY')):
+    for kind, key in (('deepgram', 'DEEPGRAM_API_KEY'), ('cartesia', 'CARTESIA_API_KEY'), ('fish', 'FISH_API_KEY'),
+                      ('elevenlabs', 'ELEVENLABS_API_KEY')):
         if kind in (stt_kind, tts_kind) and not os.environ.get(key):
             print(f'Set {key} in local-voice-pipecat/.env to use {kind}.', file=sys.stderr)
             return 2
