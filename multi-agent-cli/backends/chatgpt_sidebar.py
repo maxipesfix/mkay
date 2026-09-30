@@ -347,9 +347,12 @@ class Modes:
         return cls.MENU_LABELS.get(' '.join(text.split()).casefold())
 
     def control(self):
+        sidebar_hidden = False
         for node, role, _ in self.reader.walk(self.reader.main_window(), 1600):
             if role not in ('AXPopUpButton', 'AXButton'):
                 continue
+            if label(node) == 'Show sidebar':
+                sidebar_hidden = True
             # The observed label is in AXDescription; an unrelated AXTitle must
             # not hide it, and a chat merely titled Codex is never a mode control.
             for key in ('AXDescription', 'AXTitle'):
@@ -359,6 +362,10 @@ class Modes:
                     if mode is None:
                         raise SidebarError('Unrecognized mode label: ' + text)
                     return node, mode
+        if sidebar_hidden:
+            # The mode popup is at the top of the sidebar; a collapsed sidebar removes it.
+            raise SidebarError('The sidebar is hidden, and the mode control is in it. Open it in the app and rerun.')
+        # Changed, so reads retry: right after launch or an update the window is still loading.
         raise Changed('The Switch mode popup was not found. Run --app chatgpt debug-mode.')
 
     def menu_candidates(self, roots, limit):
@@ -790,7 +797,7 @@ def main(args=None):
         elif args[0] == 'debug-mode':
             result = Modes(reader).debug(emit=reader.log)
         elif args[0] == 'status':
-            result = reader.read(lambda: status(reader))
+            result = reader.wait_read(lambda: status(reader))
         elif args[0] == 'new':
             result = new_chat(reader, os.environ.get('CTL_PROJECT', ''))
         elif args[0] == 'read':
