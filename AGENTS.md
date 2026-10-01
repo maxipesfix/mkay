@@ -93,6 +93,10 @@ These were learned by breaking them; keep them unless you have evidence otherwis
   Permissions follow the signature, so ad-hoc builds lose Accessibility on each rebuild.
   Users see the name m’kay (app, disk image, prompts); the bundle ID `ai.mkay.mac`, the
   executable and the app's folders keep `mkay` (renaming them would lose sign-ins).
+- **Mac app updates:** installed copies trust only `SUPublicEDKey` and the feed URL baked
+  into them, so never change either, nor the release asset names (`mkay.dmg`,
+  `appcast.xml`); publish with `release.sh`, which refuses a build not made from the
+  pushed commit or not notarized. `CFBundleVersion` (the commit count) must keep rising.
 - **Match the surrounding code.** Standard library only in `multi-agent-cli`; keep
   diagnostics read-only; keep titles exactly as the app shows them (never deduplicate).
 
@@ -211,6 +215,13 @@ These were learned by breaking them; keep them unless you have evidence otherwis
   from the bundled Python, setup window, connector events; notarized and stapled.
 - Published as GitHub release v0.1.0 (`mkay.dmg`, 2026-09-28); the landing page's
   Download for Mac links to `releases/latest/download/mkay.dmg`.
+- Updates with Sparkle 2.10.0 from 0.1.2 on: daily checks of `appcast.xml` on the latest
+  GitHub release, Check for Updates…, an "Update to VERSION Available…" menu item while
+  the alert may sit behind other apps; `release.sh` signs the disk image (EdDSA key in
+  the login keychain, account `ai.mkay.mac`), writes the feed and publishes the release.
+  Checked 2026-10-01 against a local feed (silent install on quit, and Install and Relaunch).
+- The menu no longer says "Finish Setup" when setup is complete (0.1.1): Automation is
+  known only while System Events runs, so its last answer is remembered.
 - Checked 2026-09-28: sign-in and a voice session through the app, from a phone's
   browser.
 
@@ -238,7 +249,8 @@ These were learned by breaking them; keep them unless you have evidence otherwis
 - ChatGPT: paging a collapsed Projects list (it was already expanded when tested).
 - MCP HTTP on a non-local address (Tailscale) and from a remote client.
 - Whether automation works while the Mac's screen is locked.
-- Mac app: the notarized disk image opened on another Mac.
+- Mac app: the notarized disk image opened on another Mac; a Sparkle update from the real
+  feed (the first will be 0.1.2 to 0.1.3; 0.1.0 and 0.1.1 cannot update themselves).
 
 **Gaps**
 - `new_chat` exists for ChatGPT/Codex and Cursor; add it for Claude (Chat and Code).
@@ -259,7 +271,7 @@ These were learned by breaking them; keep them unless you have evidence otherwis
   Alpha 1 (Nemotron 3 Nano 30B-A3B fine-tune for voice agents' tool calling) is the
   candidate: its 4-bit GGUF is 24.5 GB, so it needs a Mac with 32 GB or more, temperature
   0 and thinking off. No model small enough for 16 GB scores well in kwindla/aiewf-eval.
-- Mac app: Sparkle updates (appcast on mkay.ai), Intel build, token in the Keychain,
+- Mac app: Intel build, token in the Keychain,
   "Move to Applications" when opened from the disk image; optionally open a locally run
   `local-voice-pipecat` page too (the menu's Open mkay.ai always opens the cloud page,
   and the local client does not need the app).

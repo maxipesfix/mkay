@@ -16,6 +16,8 @@
 #   MKAY_NOTARY_PROFILE  notarytool keychain profile; when set, the disk image is notarized
 #                        and stapled (xcrun notarytool store-credentials PROFILE ...)
 #   MKAY_PYTHON          Python version to bundle (default 3.12)
+#
+# release.sh publishes the disk image (and the update feed) as a GitHub release.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -40,11 +42,16 @@ step() { printf '\n== %s\n' "$*"; }
 
 step "Swift shell"
 swift build -c release --package-path "$HERE" --arch arm64
-BIN=$(swift build -c release --package-path "$HERE" --arch arm64 --show-bin-path)/mkay
+BIN_DIR=$(swift build -c release --package-path "$HERE" --arch arm64 --show-bin-path)
 
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$RES"
-cp "$BIN" "$APP/Contents/MacOS/mkay"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Frameworks" "$RES"
+cp "$BIN_DIR/mkay" "$APP/Contents/MacOS/mkay"
+install_name_tool -add_rpath @executable_path/../Frameworks "$APP/Contents/MacOS/mkay"
+# Sparkle (updates). Its XPC services are only for sandboxed apps.
+SPARKLE=$APP/Contents/Frameworks/Sparkle.framework
+ditto "$BIN_DIR/Sparkle.framework" "$SPARKLE"
+rm -rf "$SPARKLE/Versions/B/XPCServices" "$SPARKLE/XPCServices"
 cp "$HERE/Resources/Info.plist" "$APP/Contents/Info.plist"
 VERSION=$(plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist")
 plutil -replace CFBundleVersion -string "$(git -C "$ROOT" rev-list --count HEAD)" "$APP/Contents/Info.plist"
@@ -91,6 +98,7 @@ PYTHONNOUSERSITE=1 "$PY" "$RES/mkay/multi-agent-cli/agent_ctl.py" apps --json >/
 
 step "Sign ($IDENTITY)"
 find "$RES/python" -type f \( -name '*.so' -o -name '*.dylib' \) -print0 | xargs -0 "${SIGN[@]}"
+"${SIGN[@]}" "$SPARKLE/Versions/B/Autoupdate" "$SPARKLE/Versions/B/Updater.app" "$SPARKLE"
 "${SIGN[@]}" --entitlements "$HERE/Resources/mkay.entitlements" "$(realpath "$PY")"
 "${SIGN[@]}" --entitlements "$HERE/Resources/mkay.entitlements" "$APP"
 codesign --verify --deep --strict "$APP"

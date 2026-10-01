@@ -5,6 +5,7 @@ import SwiftUI
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let connector = Connector()
+    private let updater = Updater()
     private var statusItem: NSStatusItem!
     private var setupWindow: NSWindow?
     private var observation: AnyCancellable?
@@ -145,6 +146,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if setupNeeded {
             menu.addItem(item("⚠︎ Finish Setup…") { [weak self] in self?.showSetup() })
         }
+        if let version = updater.pending {
+            menu.addItem(item("Update to \(version) Available…") { [updater] in updater.check() })
+        }
         if connector.isLinked {
             menu.addItem(item("Open mkay.ai") { [connector] in Browser.open(connector.accountPage) })
         }
@@ -174,6 +178,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         menu.addItem(.separator())
         menu.addItem(item("Set Up…") { [weak self] in self?.showSetup() })
+        if Updater.enabled {
+            menu.addItem(updater.canCheck ? item("Check for Updates…") { [updater] in updater.check() }
+                                          : disabled("Check for Updates…"))
+        }
         let login = item("Start at Login") { LoginItem.set(!LoginItem.enabled) }
         login.state = LoginItem.enabled ? .on : .off
         menu.addItem(login)
