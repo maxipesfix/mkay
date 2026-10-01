@@ -18,16 +18,24 @@ enum Permissions {
     }
 
     /// Automation of System Events: the CLI presses keys (paste, Return) through osascript.
+    /// macOS answers only while System Events runs, and it quits when idle; then the last
+    /// answer is used, so the menu does not ask to finish a setup that is complete.
     static func automation(ask: Bool) -> Automation {
         let target = NSAppleEventDescriptor(bundleIdentifier: "com.apple.systemevents")
         guard let desc = target.aeDesc else { return .unknown }
+        let result: Automation
         switch AEDeterminePermissionToAutomateTarget(desc, typeWildCard, typeWildCard, ask) {
-        case noErr: return .allowed
-        case OSStatus(errAEEventNotPermitted): return .denied
-        case OSStatus(errAEEventWouldRequireUserConsent): return .notAsked
-        default: return .unknown  // System Events is not running (procNotFound)
+        case noErr: result = .allowed
+        case OSStatus(errAEEventNotPermitted): result = .denied
+        case OSStatus(errAEEventWouldRequireUserConsent): result = .notAsked
+        default:  // System Events is not running (procNotFound)
+            return UserDefaults.standard.bool(forKey: automationKey) ? .allowed : .unknown
         }
+        UserDefaults.standard.set(result == .allowed, forKey: automationKey)
+        return result
     }
+
+    private static let automationKey = "automationAllowed"
 
     /// Asks for Automation now, while the user is at the Mac, rather than during a session.
     static func requestAutomation(completion: @escaping @MainActor (Automation) -> Void) {
